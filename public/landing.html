@@ -1,0 +1,1493 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OnePulso · Cold email que llega al cliente ideal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fafbfc;
+    --paper: #ffffff;
+    --ink: #0a0d14;
+    --ink-2: #23252c;
+    --ink-3: #54565b;
+    --ink-4: #848689;
+    --ink-5: #b6b6b9;
+    --line: #ececef;
+    --line-2: #e0e0e3;
+    --surf: #f5f9fe;
+    --surf-2: #f3f3f3;
+
+    --orange: #f9a603;
+    --orange-2: #f59e3a;
+    --purple: #d15cfe;
+    --purple-2: #9a69f5;
+    --blue: #0566ea;
+    --green: #1f8a5b;
+    --danger: #ff3344;
+
+    --g-brand: linear-gradient(112deg, #f9a603 0%, #f59e3a 22%, #ea7fd3 55%, #b18bf8 78%, #9a69f5 100%);
+    --g-brand-r: linear-gradient(112deg, #9a69f5 0%, #b18bf8 22%, #ea7fd3 55%, #f59e3a 78%, #f9a603 100%);
+
+    --r-sm: 8px;
+    --r: 12px;
+    --r-md: 16px;
+    --r-lg: 20px;
+    --r-xl: 28px;
+
+    --shadow-sm: 0 1px 2px rgba(10,13,20,0.04), 0 0 0 1px rgba(10,13,20,0.04);
+    --shadow-md: 0 4px 14px rgba(10,13,20,0.06), 0 0 0 1px rgba(10,13,20,0.04);
+    --shadow-lg: 0 18px 48px rgba(10,13,20,0.12), 0 0 0 1px rgba(10,13,20,0.04);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    color: var(--ink-2);
+    background: var(--bg);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  a { color: inherit; text-decoration: none; }
+  button { font: inherit; border: 0; cursor: pointer; background: none; padding: 0; color: inherit; }
+  img { display: block; max-width: 100%; }
+
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 28px; }
+  .wrap-narrow { max-width: 980px; margin: 0 auto; padding: 0 28px; }
+
+  /* Headline scale */
+  .h-display, h1, h2, h3 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    color: var(--ink);
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+    margin: 0;
+    font-weight: 800;
+  }
+  h2 { font-size: 56px; letter-spacing: -0.035em; line-height: 1.02; }
+  h3 { font-size: 28px; letter-spacing: -0.02em; line-height: 1.15; font-weight: 700; }
+  .h-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 8px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .h-eyebrow .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(31,138,91,0.18); }
+  .serif { font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; letter-spacing: -0.02em; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 48px; padding: 0 22px;
+    border-radius: 12px;
+    font-weight: 600; font-size: 15px;
+    transition: transform .08s, filter .12s, background .12s, box-shadow .12s;
+    white-space: nowrap;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-dark { background: var(--ink); color: white; }
+  .btn-dark:hover { background: #1a1d24; }
+  .btn-brand {
+    background: var(--g-brand);
+    color: white;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 8px 24px rgba(209,92,254,0.28);
+  }
+  .btn-brand:hover { filter: brightness(1.04); }
+  .btn-ghost {
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--line-2);
+  }
+  .btn-ghost:hover { background: var(--paper); border-color: var(--ink-5); }
+  .btn-link {
+    height: auto; padding: 0;
+    color: var(--ink); font-weight: 600;
+    border-bottom: 1px solid currentColor;
+    border-radius: 0;
+  }
+  .btn-sm { height: 38px; padding: 0 16px; font-size: 13.5px; border-radius: 10px; }
+
+  /* Nav */
+  nav.top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(250,251,252,0.85);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid transparent;
+    transition: border-color .2s, background .2s;
+  }
+  nav.top.scrolled { border-bottom-color: var(--line); background: rgba(250,251,252,0.95); }
+  nav.top .row {
+    display: flex; align-items: center; gap: 8px;
+    height: 68px;
+  }
+  .brand {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 800; font-size: 22px;
+    letter-spacing: -0.04em; color: var(--ink);
+    display: inline-flex; align-items: baseline;
+  }
+  .brand .dots { display: inline-flex; gap: 2.5px; margin-left: 4px; align-self: flex-start; margin-top: 2px; }
+  .brand .dots .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-4); }
+  .brand .dots .d.b { background: var(--ink); }
+  nav.top .links {
+    display: flex; gap: 4px; margin-left: 28px;
+  }
+  nav.top .links a {
+    padding: 8px 14px; border-radius: 8px;
+    font-size: 14px; font-weight: 500; color: var(--ink-3);
+  }
+  nav.top .links a:hover { color: var(--ink); background: var(--paper); }
+  nav.top .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  nav.top .actions a.text { font-size: 14px; font-weight: 500; color: var(--ink-3); padding: 0 10px; }
+  nav.top .actions a.text:hover { color: var(--ink); }
+
+  /* HERO */
+  .hero {
+    position: relative;
+    padding: 80px 0 100px;
+    overflow: hidden;
+  }
+  .hero::before, .hero::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    z-index: 0;
+    pointer-events: none;
+  }
+  .hero::before {
+    width: 480px; height: 480px;
+    background: radial-gradient(circle, rgba(249,166,3,0.22), transparent 60%);
+    top: -80px; right: -120px;
+  }
+  .hero::after {
+    width: 520px; height: 520px;
+    background: radial-gradient(circle, rgba(209,92,254,0.18), transparent 60%);
+    bottom: -200px; left: -160px;
+  }
+  .hero .inner { position: relative; z-index: 1; }
+  .hero h1 {
+    font-size: clamp(48px, 6vw, 92px);
+    line-height: 0.96;
+    letter-spacing: -0.045em;
+    font-weight: 800;
+    color: var(--ink);
+    max-width: 1080px;
+    margin: 28px 0 0;
+  }
+  .hero h1 .grad {
+    background: var(--g-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    padding-right: 0.05em;
+  }
+  .hero h1 .serif {
+    font-family: 'Instrument Serif', serif;
+    font-weight: 400;
+    font-style: italic;
+    letter-spacing: -0.025em;
+  }
+  .hero p.lede {
+    max-width: 640px;
+    margin: 28px 0 0;
+    font-size: 19px;
+    line-height: 1.5;
+    color: var(--ink-3);
+  }
+  .hero .cta-row {
+    margin-top: 32px;
+    display: flex; align-items: center; gap: 14px;
+    flex-wrap: wrap;
+  }
+  .hero .cta-meta {
+    margin-top: 20px;
+    display: flex; gap: 18px; flex-wrap: wrap;
+    font-size: 13px; color: var(--ink-4);
+  }
+  .hero .cta-meta span {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .hero .cta-meta .ck {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--green); color: white;
+    display: inline-grid; place-items: center;
+    font-size: 10px;
+  }
+
+  /* Stats bar under hero */
+  .stats {
+    margin-top: 64px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .stats > div {
+    padding: 22px 28px 22px 0;
+    border-right: 1px solid var(--line);
+  }
+  .stats > div:last-child { border-right: 0; padding-right: 0; }
+  .stats .v {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 800; font-size: 36px; letter-spacing: -0.03em;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .stats .v .acc {
+    background: var(--g-brand);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  .stats .l {
+    margin-top: 8px;
+    font-size: 13.5px; color: var(--ink-3); line-height: 1.45;
+  }
+
+  /* Hero visual — composer mock */
+  .hero-stage {
+    margin-top: 64px;
+    position: relative;
+  }
+  .stage-frame {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    position: relative;
+  }
+  .stage-top {
+    height: 40px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(to bottom, #fbfbfc, var(--paper));
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 16px;
+  }
+  .tl { display: inline-flex; gap: 6px; }
+  .tl span { width: 10px; height: 10px; border-radius: 50%; background: #e4e4e8; }
+  .tl span:nth-child(1) { background: #ff5f57; }
+  .tl span:nth-child(2) { background: #febc2e; }
+  .tl span:nth-child(3) { background: #28c840; }
+  .stage-url {
+    flex: 1; max-width: 320px; margin: 0 auto;
+    background: var(--surf-2); height: 22px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-4);
+  }
+  .stage-body { display: grid; grid-template-columns: 320px 1fr; min-height: 540px; }
+  .composer-side {
+    border-right: 1px solid var(--line);
+    padding: 18px;
+    background: linear-gradient(180deg, var(--surf), var(--paper) 60%);
+  }
+  .composer-main { padding: 28px 32px; position: relative; }
+
+  /* mini cards inside composer */
+  .target {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 10px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .target .av {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: var(--g-brand);
+    color: white; display: grid; place-items: center;
+    font-weight: 700; font-family: 'Plus Jakarta Sans'; font-size: 13px;
+  }
+  .target .info { flex: 1; min-width: 0; }
+  .target .nm { font-weight: 600; color: var(--ink); font-size: 13px; }
+  .target .ro { font-size: 11.5px; color: var(--ink-4); }
+  .pill-score {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 600;
+    padding: 2px 7px; border-radius: 6px;
+  }
+  .pill-score.hi { background: rgba(31,138,91,0.12); color: var(--green); }
+  .pill-score.md { background: rgba(154,105,245,0.12); color: var(--purple-2); }
+
+  .side-label {
+    text-transform: uppercase; font-size: 10.5px; letter-spacing: 0.08em;
+    color: var(--ink-4); font-weight: 600; margin: 14px 0 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .side-label::after {
+    content: ''; flex: 1; height: 1px; background: var(--line);
+  }
+
+  /* Email composer */
+  .compose-head {
+    display: flex; gap: 12px; align-items: center;
+    padding-bottom: 14px; border-bottom: 1px solid var(--line);
+  }
+  .compose-head .ic {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: var(--surf); display: grid; place-items: center;
+    color: var(--purple-2);
+  }
+  .compose-head .who { font-weight: 600; color: var(--ink); font-size: 14px; }
+  .compose-head .meta { font-size: 12px; color: var(--ink-4); }
+  .compose-head .stat {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; color: var(--green);
+    padding: 4px 10px;
+    background: rgba(31,138,91,0.10);
+    border-radius: 999px;
+  }
+  .compose-head .stat .pd {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 0 4px rgba(31,138,91,0.16);
+    animation: pulse 1.6s ease-out infinite;
+  }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 2px rgba(31,138,91,0.20); } 70% { box-shadow: 0 0 0 8px rgba(31,138,91,0); } 100% { box-shadow: 0 0 0 8px rgba(31,138,91,0); } }
+
+  .compose-field {
+    display: flex; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .compose-field .k { color: var(--ink-4); width: 60px; font-weight: 500; }
+  .compose-field .v { color: var(--ink); flex: 1; }
+  .chip-token {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(154,105,245,0.12);
+    color: #7e3eda;
+    padding: 1px 6px; border-radius: 5px;
+    font-size: 12.5px; font-weight: 500;
+    margin: 0 1px;
+  }
+
+  .compose-body {
+    padding: 18px 0 0;
+    color: var(--ink-2);
+    font-size: 14.5px; line-height: 1.6;
+  }
+  .compose-body p { margin: 0 0 12px; }
+
+  .compose-foot {
+    margin-top: 14px;
+    display: flex; align-items: center; gap: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* Floating cards on top of stage */
+  .float {
+    position: absolute;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow-md);
+    padding: 12px 14px;
+    z-index: 5;
+  }
+  .float.tl-card { top: -22px; left: -22px; }
+  .float.br-card { bottom: -22px; right: -22px; }
+
+  .float-row { display: flex; align-items: center; gap: 10px; }
+  .float .av-sm {
+    width: 30px; height: 30px; border-radius: 50%;
+    display: grid; place-items: center; color: white;
+    font-weight: 700; font-size: 11px; font-family: 'Plus Jakarta Sans';
+  }
+  .float .av-sm.p { background: linear-gradient(135deg, #d15cfe, #9a69f5); }
+  .float .av-sm.o { background: linear-gradient(135deg, #f9a603, #f59e3a); }
+  .float .av-sm.b { background: linear-gradient(135deg, #0566ea, #2a87f5); }
+  .float .av-sm.g { background: linear-gradient(135deg, #1f8a5b, #3aa873); }
+
+  /* Logo strip */
+  .logos {
+    padding: 64px 0 24px;
+    text-align: center;
+  }
+  .logos .label {
+    font-size: 12.5px; color: var(--ink-4); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin-bottom: 24px;
+  }
+  .logos .row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 32px; flex-wrap: wrap;
+  }
+  .logo-mark {
+    color: var(--ink-3);
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+    opacity: 0.7;
+    transition: opacity .2s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .logo-mark:hover { opacity: 1; }
+
+  /* Section title */
+  .section {
+    padding: 110px 0;
+    position: relative;
+  }
+  .section.alt { background: var(--paper); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .section.dark {
+    background: var(--ink);
+    color: white;
+  }
+  .section.dark h2, .section.dark h3 { color: white; }
+  .section.dark .h-eyebrow { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.10); color: rgba(255,255,255,0.92); }
+
+  .section-head {
+    max-width: 760px;
+    margin: 0 0 56px;
+  }
+  .section-head.centered { margin: 0 auto 56px; text-align: center; }
+  .section-head h2 { margin-top: 18px; }
+  .section-head p {
+    margin-top: 20px;
+    font-size: 19px;
+    line-height: 1.5;
+    color: var(--ink-3);
+    max-width: 640px;
+  }
+  .section-head.centered p { margin-left: auto; margin-right: auto; }
+
+  /* Problem / Promise */
+  .promise-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+  .promise-list { display: flex; flex-direction: column; gap: 6px; }
+  .promise-list .item {
+    display: flex; gap: 18px; align-items: flex-start;
+    padding: 22px 0;
+    border-top: 1px solid var(--line);
+  }
+  .promise-list .item:last-child { border-bottom: 1px solid var(--line); }
+  .promise-list .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--ink-4); font-weight: 600;
+    margin-top: 6px; min-width: 30px;
+  }
+  .promise-list .ti {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 22px; font-weight: 700; letter-spacing: -0.02em;
+    color: var(--ink);
+    line-height: 1.2;
+  }
+  .promise-list .desc {
+    margin-top: 6px; color: var(--ink-3); font-size: 15px; line-height: 1.55;
+    max-width: 460px;
+  }
+
+  /* Showcase card */
+  .showcase {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    padding: 36px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+  }
+  .showcase::before {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(120% 70% at 100% 0%, rgba(209,92,254,0.10), transparent 50%),
+                radial-gradient(80% 60% at 0% 100%, rgba(249,166,3,0.08), transparent 60%);
+    pointer-events: none;
+  }
+  .showcase-inner { position: relative; z-index: 1; }
+
+  .icp-card {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .icp-tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px; font-weight: 500;
+    color: var(--ink-2);
+    margin: 3px;
+  }
+  .icp-tag.acc { background: linear-gradient(120deg, rgba(249,166,3,0.10), rgba(209,92,254,0.10)); border-color: rgba(209,92,254,0.20); color: var(--ink); }
+
+  /* Features grid */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .f-card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 28px;
+    transition: transform .15s, box-shadow .15s, border-color .15s;
+  }
+  .f-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--line-2); }
+  .f-card .ico {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    display: grid; place-items: center;
+    background: var(--surf);
+    color: var(--ink);
+    margin-bottom: 18px;
+  }
+  .f-card .ico.brand {
+    background: var(--g-brand);
+    color: white;
+    box-shadow: 0 8px 20px rgba(209,92,254,0.18);
+  }
+  .f-card h3 {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin-bottom: 8px;
+  }
+  .f-card p { color: var(--ink-3); font-size: 14.5px; line-height: 1.55; margin: 0; }
+  .f-card.big { grid-column: span 2; padding: 32px; display: grid; grid-template-columns: 1fr 1.1fr; gap: 32px; align-items: center; }
+  .f-card.big .copy { padding: 8px 0; }
+  .f-card.big .visual { background: var(--surf); border-radius: 14px; padding: 20px; border: 1px solid var(--line); }
+
+  /* How it works */
+  .how {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+  }
+  .how .step {
+    padding: 36px 28px;
+    border-right: 1px solid var(--line);
+    position: relative;
+  }
+  .how .step:last-child { border-right: 0; }
+  .how .step .n {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-4);
+    margin-bottom: 14px;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .how .step .n::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--g-brand);
+  }
+  .how .step h3 { font-size: 22px; margin: 0 0 10px; }
+  .how .step p { color: var(--ink-3); font-size: 14px; margin: 0; line-height: 1.55; }
+  .how .step .mock {
+    margin-top: 22px;
+    height: 110px;
+    background: var(--surf);
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    padding: 12px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--ink-3); line-height: 1.5;
+    overflow: hidden;
+  }
+
+  /* Quote */
+  .quote-section {
+    padding: 100px 0;
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    text-align: center;
+    position: relative;
+  }
+  .quote-text {
+    max-width: 880px;
+    margin: 0 auto;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 38px;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+    line-height: 1.18;
+    color: var(--ink);
+  }
+  .quote-text .acc {
+    background: var(--g-brand);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  .quote-author {
+    margin-top: 28px;
+    display: inline-flex; align-items: center; gap: 14px;
+  }
+  .quote-author .ph {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #d15cfe, #9a69f5);
+    color: white; display: grid; place-items: center;
+    font-weight: 700; font-family: 'Plus Jakarta Sans';
+  }
+  .quote-author .nm { font-weight: 600; color: var(--ink); }
+  .quote-author .ro { font-size: 13px; color: var(--ink-4); }
+
+  /* Pricing */
+  .price-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  .price-card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 32px 28px;
+    display: flex; flex-direction: column;
+  }
+  .price-card.featured {
+    background: var(--ink);
+    color: white;
+    border-color: var(--ink);
+    position: relative;
+    overflow: hidden;
+  }
+  .price-card.featured::before {
+    content: '';
+    position: absolute; inset: -1px;
+    border-radius: var(--r-lg);
+    padding: 1.5px;
+    background: var(--g-brand);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    pointer-events: none;
+  }
+  .price-card .plan {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 14px; font-weight: 700; letter-spacing: 0.02em;
+    text-transform: uppercase; color: var(--ink);
+  }
+  .price-card.featured .plan { color: white; }
+  .price-card .desc {
+    margin-top: 8px;
+    font-size: 14px; color: var(--ink-4);
+    min-height: 42px;
+  }
+  .price-card.featured .desc { color: rgba(255,255,255,0.65); }
+  .price-card .price {
+    margin-top: 24px;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .price-card .price .amt {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 800;
+    font-size: 56px;
+    letter-spacing: -0.035em;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .price-card.featured .price .amt {
+    background: var(--g-brand);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  .price-card .price .unit {
+    font-size: 14px; color: var(--ink-4); font-weight: 500;
+  }
+  .price-card.featured .price .unit { color: rgba(255,255,255,0.65); }
+  .price-card ul {
+    margin: 28px 0 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 12px;
+    font-size: 14.5px;
+  }
+  .price-card li {
+    display: flex; gap: 10px; align-items: flex-start; color: var(--ink-2);
+    line-height: 1.45;
+  }
+  .price-card.featured li { color: rgba(255,255,255,0.92); }
+  .price-card li .ck {
+    width: 18px; height: 18px; flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--surf-2);
+    color: var(--ink-2);
+    display: grid; place-items: center;
+    margin-top: 2px;
+  }
+  .price-card.featured li .ck {
+    background: var(--g-brand);
+    color: white;
+  }
+  .price-card .cta { margin-top: 28px; }
+  .price-card.featured .badge-feat {
+    position: absolute; top: 24px; right: 24px;
+    background: var(--g-brand);
+    color: white;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 5px 10px;
+    border-radius: 999px;
+  }
+
+  /* Final CTA */
+  .final-cta {
+    padding: 100px 0;
+    background: var(--ink);
+    color: white;
+    position: relative;
+    overflow: hidden;
+  }
+  .final-cta::before {
+    content: '';
+    position: absolute;
+    top: -120px; right: -80px;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(249,166,3,0.18), transparent 60%);
+    filter: blur(60px);
+  }
+  .final-cta::after {
+    content: '';
+    position: absolute;
+    bottom: -200px; left: -100px;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(209,92,254,0.20), transparent 60%);
+    filter: blur(60px);
+  }
+  .final-cta .inner {
+    position: relative; z-index: 1;
+    text-align: center;
+    max-width: 900px; margin: 0 auto;
+  }
+  .final-cta h2 {
+    font-size: clamp(48px, 6vw, 84px);
+    color: white;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+  .final-cta h2 .acc {
+    background: var(--g-brand);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  .final-cta p {
+    margin-top: 24px;
+    font-size: 19px; color: rgba(255,255,255,0.65);
+    max-width: 580px; margin-left: auto; margin-right: auto;
+  }
+  .final-cta .cta-row { margin-top: 36px; display: inline-flex; gap: 12px; }
+  .final-cta .btn-ghost { color: white; border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.04); }
+  .final-cta .btn-ghost:hover { background: rgba(255,255,255,0.08); }
+
+  /* Footer */
+  footer {
+    background: var(--bg);
+    padding: 56px 0 36px;
+    border-top: 1px solid var(--line);
+  }
+  footer .row {
+    display: grid;
+    grid-template-columns: 1.4fr repeat(4, 1fr);
+    gap: 32px;
+  }
+  footer h4 {
+    font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin: 0 0 14px;
+  }
+  footer ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  footer ul a { font-size: 14px; color: var(--ink-3); }
+  footer ul a:hover { color: var(--ink); }
+  footer .col1 { max-width: 320px; }
+  footer .col1 p { font-size: 14px; color: var(--ink-3); line-height: 1.55; margin: 10px 0 18px; }
+  footer .legal {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12.5px; color: var(--ink-4);
+    flex-wrap: wrap; gap: 12px;
+  }
+  footer .legal a { color: var(--ink-4); }
+  footer .legal a:hover { color: var(--ink); }
+
+  /* Helpers */
+  .reveal { opacity: 0; transform: translateY(12px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.on { opacity: 1; transform: none; }
+
+  /* Decorative SVG accent */
+  .accent-line { stroke: var(--ink-5); stroke-width: 1; fill: none; }
+
+  /* responsive */
+  @media (max-width: 1100px) {
+    .features { grid-template-columns: repeat(2, 1fr); }
+    .f-card.big { grid-column: span 2; grid-template-columns: 1fr; }
+    .how { grid-template-columns: repeat(2, 1fr); }
+    .how .step:nth-child(2) { border-right: 0; }
+    .how .step { border-bottom: 1px solid var(--line); }
+    .stage-body { grid-template-columns: 1fr; }
+    .composer-side { display: none; }
+    .promise-grid { grid-template-columns: 1fr; gap: 32px; }
+    footer .row { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 760px) {
+    nav.top .links { display: none; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stats > div { padding: 18px; border-right: none; border-bottom: 1px solid var(--line); }
+    .stats > div:nth-child(2n) { border-right: none; }
+    .features, .price-grid { grid-template-columns: 1fr; }
+    .quote-text { font-size: 26px; }
+    .hero { padding: 56px 0 64px; }
+    .section { padding: 72px 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="top" id="nav">
+  <div class="wrap row">
+    <a href="#" class="brand">onepulso<span class="dots"><span class="d"></span><span class="d b"></span></span></a>
+    <div class="links">
+      <a href="#producto">Producto</a>
+      <a href="#funciona">Cómo funciona</a>
+      <a href="#precios">Precios</a>
+      <a href="#clientes">Clientes</a>
+      <a href="#recursos">Recursos</a>
+    </div>
+    <div class="actions">
+      <a class="text" href="/login">Iniciar sesión</a>
+      <a class="btn btn-brand btn-sm" href="/login">Empezar gratis →</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="wrap inner">
+    <span class="h-eyebrow"><span class="d"></span> Activo · 1.284 clientes ideales identificados hoy</span>
+
+    <h1>
+      Cold email que <span class="serif">de verdad</span><br>
+      llega <span class="grad">al cliente ideal.</span>
+    </h1>
+
+    <p class="lede">
+      OnePulso identifica a tu ICP, redacta secuencias con su lenguaje y agenda reuniones en tu calendario.
+      Tú apareces a cerrar — todo lo demás ya lo hizo el sistema.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn btn-brand" href="/login">Empezar gratis 14 días <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></a>
+      <a class="btn btn-ghost" href="#funciona">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke-width="0"/></svg>
+        Ver demo (2 min)
+      </a>
+    </div>
+
+    <div class="cta-meta">
+      <span><span class="ck">✓</span> Sin tarjeta de crédito</span>
+      <span><span class="ck">✓</span> Setup en 8 minutos</span>
+      <span><span class="ck">✓</span> Cancela cuando quieras</span>
+    </div>
+
+    <!-- HERO PRODUCT STAGE -->
+    <div class="hero-stage">
+      <!-- Floating top-left card -->
+      <div class="float tl-card">
+        <div class="float-row">
+          <div class="av-sm p">CV</div>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--ink);">Carla Vidal respondió</div>
+            <div style="font-size:11.5px;color:var(--ink-4);">Lyra Capital · "¿Podemos hablar mañana?"</div>
+          </div>
+          <div class="pill-score hi" style="margin-left:8px;">+92</div>
+        </div>
+      </div>
+
+      <!-- Floating bottom-right card -->
+      <div class="float br-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="position:relative;width:38px;height:38px;">
+            <svg width="38" height="38" viewBox="0 0 38 38">
+              <circle cx="19" cy="19" r="15" fill="none" stroke="#ececef" stroke-width="3"/>
+              <circle cx="19" cy="19" r="15" fill="none" stroke="url(#brandgrad)" stroke-width="3" stroke-linecap="round"
+                      stroke-dasharray="94.25" stroke-dashoffset="22"
+                      transform="rotate(-90 19 19)"/>
+              <defs>
+                <linearGradient id="brandgrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#f9a603"/>
+                  <stop offset="100%" stop-color="#d15cfe"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--ink-4);font-weight:600;letter-spacing:0.05em;text-transform:uppercase;">Reuniones esta semana</div>
+            <div style="font-family:'Plus Jakarta Sans';font-weight:800;font-size:22px;color:var(--ink);letter-spacing:-0.02em;line-height:1.1;margin-top:2px;">34 <span style="font-size:12px;color:var(--green);font-weight:600;">+18%</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-frame">
+        <div class="stage-top">
+          <div class="tl"><span></span><span></span><span></span></div>
+          <div class="stage-url">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            app.onepulso.com / campañas / fintech-es-q2
+          </div>
+        </div>
+        <div class="stage-body">
+          <!-- Sidebar with targets -->
+          <div class="composer-side">
+            <div class="side-label">ICP detectados · 12</div>
+
+            <div class="target">
+              <div class="av">CV</div>
+              <div class="info">
+                <div class="nm">Carla Vidal</div>
+                <div class="ro">Head of Growth · Lyra</div>
+              </div>
+              <div class="pill-score hi">92</div>
+            </div>
+
+            <div class="target">
+              <div class="av" style="background:linear-gradient(135deg,#0566ea,#9a69f5);">DS</div>
+              <div class="info">
+                <div class="nm">Diego Salinas</div>
+                <div class="ro">CMO · Núclea</div>
+              </div>
+              <div class="pill-score md">78</div>
+            </div>
+
+            <div class="target">
+              <div class="av" style="background:linear-gradient(135deg,#f9a603,#f59e3a);">IB</div>
+              <div class="info">
+                <div class="nm">Ines Brunetti</div>
+                <div class="ro">VP Sales · Helia</div>
+              </div>
+              <div class="pill-score hi">88</div>
+            </div>
+
+            <div class="target">
+              <div class="av" style="background:linear-gradient(135deg,#1f8a5b,#3aa873);">ML</div>
+              <div class="info">
+                <div class="nm">Marcos Llanos</div>
+                <div class="ro">Director Com. · Atlas</div>
+              </div>
+              <div class="pill-score hi">95</div>
+            </div>
+
+            <div class="side-label">Buscando más…</div>
+            <div style="background:white;border:1px dashed var(--line-2);border-radius:10px;padding:12px;font-size:12px;color:var(--ink-4);text-align:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:inline-block;vertical-align:-3px;margin-right:6px;animation:spin 2s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              Analizando 12.480 perfiles
+            </div>
+          </div>
+
+          <!-- Composer main -->
+          <div class="composer-main">
+            <div class="compose-head">
+              <div class="ic">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg>
+              </div>
+              <div>
+                <div class="who">Secuencia · FinTech ES · Q2</div>
+                <div class="meta">Email 1 de 4 · personalizado para Carla Vidal</div>
+              </div>
+              <div class="stat"><span class="pd"></span> Enviando ahora</div>
+            </div>
+
+            <div class="compose-field">
+              <span class="k">Para</span>
+              <span class="v">carla@lyra.es <span class="chip-token">Carla Vidal</span></span>
+            </div>
+            <div class="compose-field">
+              <span class="k">Asunto</span>
+              <span class="v"><span class="chip-token">Lyra</span> y el embudo que se rompe en marzo</span>
+            </div>
+
+            <div class="compose-body">
+              <p>Hola <span class="chip-token">Carla</span>,</p>
+              <p>Vi que <span class="chip-token">Lyra</span> abrió oficina en Madrid hace seis semanas. Felicidades — el siguiente cuello de botella suele ser el mismo: las reuniones que <em>parecían</em> cualificadas en Q1 se quedan en el aire en marzo.</p>
+              <p>Resolvimos esto con <strong>Atlas Retail</strong> (similar a Lyra en stage). Pasaron de 14 a 38 reuniones cualificadas en 60 días, sin contratar.</p>
+              <p>¿Te abro 20 minutos el jueves para enseñártelo?</p>
+              <p style="color:var(--ink-3);font-size:13.5px;margin-top:18px;">— Marta R., OnePulso<br>P.D. Adjunto el playbook que usamos con Atlas.</p>
+            </div>
+
+            <div class="compose-foot">
+              <button class="btn btn-dark btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                Aprobar y enviar
+              </button>
+              <button class="btn btn-ghost btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 22v-6h6"/></svg>
+                Regenerar
+              </button>
+              <span style="margin-left:auto;font-size:12px;color:var(--ink-4);display:inline-flex;align-items:center;gap:6px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                Optimizado para enviarse a las 09:32 · martes
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATS -->
+    <div class="stats">
+      <div>
+        <div class="v"><span class="acc">3.2×</span></div>
+        <div class="l">más respuestas que outreach manual</div>
+      </div>
+      <div>
+        <div class="v">14.7%</div>
+        <div class="l">tasa de respuesta promedio</div>
+      </div>
+      <div>
+        <div class="v">€48</div>
+        <div class="l">coste por reunión cualificada</div>
+      </div>
+      <div>
+        <div class="v">8 min</div>
+        <div class="l">para tener la primera campaña activa</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- LOGOS -->
+<div class="logos">
+  <div class="wrap">
+    <div class="label">Equipos que ya cierran con OnePulso</div>
+    <div class="row">
+      <div class="logo-mark">◆ Lyra</div>
+      <div class="logo-mark">Atlas<i style="opacity:.5">retail</i></div>
+      <div class="logo-mark">núclea</div>
+      <div class="logo-mark">▲ Helia</div>
+      <div class="logo-mark">polaris<b style="color:var(--purple);font-weight:800">.</b>os</div>
+      <div class="logo-mark">SABLE</div>
+      <div class="logo-mark">tessera°</div>
+      <div class="logo-mark">∿ trevia</div>
+    </div>
+  </div>
+</div>
+
+<!-- PROBLEM / PROMISE -->
+<section class="section" id="producto">
+  <div class="wrap">
+    <div class="promise-grid">
+      <div>
+        <span class="h-eyebrow"><span class="d" style="background:var(--orange);box-shadow:0 0 0 4px rgba(249,166,3,0.18);"></span> El problema</span>
+        <h2 style="margin-top:20px;">
+          El outreach <span class="serif">cansa.</span><br>
+          Las herramientas <span style="background: var(--g-brand);-webkit-background-clip:text;background-clip:text;color:transparent;">también.</span>
+        </h2>
+        <p style="margin-top:20px;font-size:19px;color:var(--ink-3);max-width:480px;line-height:1.5;">
+          Has probado de todo: scrapers, plantillas, agencias caras y SDRs que rotan cada seis meses.
+          OnePulso es lo opuesto. <strong style="color:var(--ink);">Una sola pieza</strong> que entiende a quién contactar, qué decirle y cuándo.
+        </p>
+      </div>
+
+      <div class="promise-list">
+        <div class="item">
+          <div class="num">01</div>
+          <div>
+            <div class="ti">Encuentra a tu ICP, no listas genéricas.</div>
+            <div class="desc">Construye buyer personas reales desde tus clientes actuales y busca gemelos en bases de +320 millones de perfiles verificados.</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="num">02</div>
+          <div>
+            <div class="ti">Escribe como tu mejor SDR — no como un bot.</div>
+            <div class="desc">Cada email se construye con contexto del contacto, su empresa y la última noticia relevante. Sin "Hola {nombre}, espero que estés bien".</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="num">03</div>
+          <div>
+            <div class="ti">Aprende cada vez que alguien responde.</div>
+            <div class="desc">El modelo ajusta el asunto, la hora y el tono según los patrones de tus mejores conversiones. Mejora solo, semana a semana.</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="num">04</div>
+          <div>
+            <div class="ti">Agenda en tu calendario, no en un Excel.</div>
+            <div class="desc">Cuando alguien dice "sí", OnePulso negocia el hueco, envía el invite y te brifa antes de la reunión. Tú solo te conectas.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section alt">
+  <div class="wrap">
+    <div class="section-head centered">
+      <span class="h-eyebrow"><span class="d"></span> Producto</span>
+      <h2>Todo lo que un SDR senior haría.<br><span class="serif">Sin descansos.</span></h2>
+      <p>Seis sistemas trabajando en paralelo para que tu equipo solo aparezca a cerrar.</p>
+    </div>
+
+    <div class="features">
+      <!-- Big feature: ICP -->
+      <div class="f-card big">
+        <div class="copy">
+          <div class="ico brand">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>
+          </div>
+          <h3>ICP Engine</h3>
+          <p>Subimos tus 20 mejores cuentas, analizamos qué tienen en común — sector, tamaño, stack, momento de crecimiento — y construimos un perfil ideal. Después buscamos a sus gemelos en tiempo real.</p>
+          <p style="margin-top:14px;color:var(--ink-2);font-size:14px;"><strong>Resultado:</strong> 4× más reuniones desde la primera semana.</p>
+        </div>
+        <div class="visual">
+          <div style="font-size:11px;color:var(--ink-4);font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">Tu perfil ideal · auto-generado</div>
+          <div style="margin:-3px;">
+            <span class="icp-tag acc">SaaS B2B</span>
+            <span class="icp-tag">Series A–B</span>
+            <span class="icp-tag">50–500 empleados</span>
+            <span class="icp-tag acc">Acaban de levantar ronda</span>
+            <span class="icp-tag">Equipo Sales 5–15 personas</span>
+            <span class="icp-tag">HubSpot o Salesforce</span>
+            <span class="icp-tag acc">Crecimiento &gt;30% YoY</span>
+            <span class="icp-tag">DACH · ES · LATAM</span>
+            <span class="icp-tag">Contratando Account Executive</span>
+          </div>
+          <div style="margin-top:18px;display:flex;align-items:center;gap:10px;padding-top:14px;border-top:1px solid var(--line);">
+            <div style="font-family:'Plus Jakarta Sans';font-weight:800;font-size:24px;color:var(--ink);letter-spacing:-0.02em;">12.480</div>
+            <div style="font-size:12px;color:var(--ink-3);">cuentas coinciden ahora mismo</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Personalization -->
+      <div class="f-card">
+        <div class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+        <h3>Copy con contexto</h3>
+        <p>Cada email cita una noticia, una contratación, una métrica real del prospecto. Lee LinkedIn, prensa, ofertas de empleo y el sitio web — y escribe como si lo hubieras hecho tú.</p>
+      </div>
+
+      <!-- Deliverability -->
+      <div class="f-card">
+        <div class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <h3>Entregabilidad 99.4%</h3>
+        <p>Inboxes calentados, dominio rotativo, SPF y DKIM bien configurados — y monitor de reputación cada 4h. Tus emails llegan al inbox principal, no a promociones.</p>
+      </div>
+
+      <!-- Multi-channel -->
+      <div class="f-card">
+        <div class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.93 19.07A10 10 0 0 1 4.93 4.93"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+        </div>
+        <h3>Multi-canal nativo</h3>
+        <p>Empieza por email, sigue por LinkedIn, cierra por llamada. La secuencia decide qué canal usar según cómo responde cada contacto — todo coordinado.</p>
+      </div>
+
+      <!-- Scheduling -->
+      <div class="f-card">
+        <div class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        </div>
+        <h3>Booking automático</h3>
+        <p>Cuando alguien dice "sí", OnePulso propone tres huecos, confirma, envía el invite y prepara un brief con el contexto del prospecto. Cero copy-paste.</p>
+      </div>
+
+      <!-- Analytics -->
+      <div class="f-card">
+        <div class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 3 5-6"/></svg>
+        </div>
+        <h3>Atribución completa</h3>
+        <p>Desde el primer touch hasta el deal firmado: sabes qué canal, qué asunto y qué SDR generó cada euro de pipeline. Tu CFO te lo agradecerá.</p>
+      </div>
+
+      <!-- Integrations -->
+      <div class="f-card">
+        <div class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </div>
+        <h3>Integra con tu stack</h3>
+        <p>HubSpot, Salesforce, Pipedrive, Slack, Notion, Google Workspace, Microsoft 365. Sincronización bidireccional cada 15 minutos — sin Zapiers a medio camino.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="section" id="funciona">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="h-eyebrow"><span class="d" style="background:var(--purple);box-shadow:0 0 0 4px rgba(209,92,254,0.18);"></span> Cómo funciona</span>
+      <h2>De cero a reuniones <span class="serif">en 8 minutos.</span></h2>
+      <p>Setup una vez, pipeline cada día. Esto es lo único que tienes que hacer.</p>
+    </div>
+
+    <div class="how">
+      <div class="step">
+        <div class="n">PASO 01</div>
+        <h3>Define tu ICP</h3>
+        <p>Sube CSV o conecta tu CRM. OnePulso analiza tus mejores clientes y construye el perfil.</p>
+        <div class="mock">
+          <div style="color:var(--purple-2);">▸ Analizando 47 cuentas activas…</div>
+          <div style="color:var(--ink-3);margin-top:4px;">✓ Sector: SaaS B2B (89%)</div>
+          <div style="color:var(--ink-3);">✓ Tamaño: 50–500 emp.</div>
+          <div style="color:var(--ink-3);">✓ Stack: HubSpot, Salesforce</div>
+          <div style="color:var(--green);font-weight:600;margin-top:4px;">→ Perfil generado</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">PASO 02</div>
+        <h3>Aprueba la secuencia</h3>
+        <p>El sistema redacta 4 emails personalizados. Tú revisas tono y mensajes — o los apruebas tal cual.</p>
+        <div class="mock">
+          <div style="color:var(--ink-2);font-weight:600;">Email 1 / 4</div>
+          <div style="color:var(--ink-3);margin-top:6px;line-height:1.5;">Asunto: "[empresa] y el bottleneck de Q2…"</div>
+          <div style="margin-top:8px;display:flex;gap:6px;">
+            <span style="background:rgba(31,138,91,0.12);color:var(--green);padding:2px 7px;border-radius:5px;font-size:10px;font-weight:600;">Aprobado</span>
+            <span style="background:var(--surf-2);color:var(--ink-3);padding:2px 7px;border-radius:5px;font-size:10px;font-weight:600;">Regenerar</span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">PASO 03</div>
+        <h3>Lanza la campaña</h3>
+        <p>OnePulso envía a velocidad humana, monitoriza respuestas y escala los positivos a llamada.</p>
+        <div class="mock">
+          <div style="display:flex;justify-content:space-between;"><span style="color:var(--ink-3);">Enviados</span><span style="color:var(--ink);font-weight:600;">1.284</span></div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;"><span style="color:var(--ink-3);">Abiertos</span><span style="color:var(--ink);font-weight:600;">847</span></div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;"><span style="color:var(--ink-3);">Respondidos</span><span style="color:var(--ink);font-weight:600;">189</span></div>
+          <div style="margin-top:8px;height:4px;background:var(--surf-2);border-radius:3px;overflow:hidden;"><div style="width:66%;height:100%;background:var(--g-brand);"></div></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">PASO 04</div>
+        <h3>Cierra reuniones</h3>
+        <p>OnePulso agenda los "sí" en tu calendario y te brifa antes de cada call. Tú solo te conectas.</p>
+        <div class="mock">
+          <div style="color:var(--ink-2);font-weight:600;">Jueves · 11:00</div>
+          <div style="color:var(--ink-3);margin-top:4px;">Carla Vidal · Lyra Capital</div>
+          <div style="background:rgba(154,105,245,0.10);border-radius:6px;padding:6px 8px;margin-top:8px;font-size:10.5px;color:#7e3eda;line-height:1.4;">Briefing listo: levantó €4M en marzo, busca CRO senior, prefiere demo técnica.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section class="quote-section" id="clientes">
+  <div class="wrap">
+    <svg width="40" height="32" viewBox="0 0 40 32" fill="none" style="margin-bottom:24px;opacity:0.6;">
+      <path d="M0 32V20C0 8.954 6.954 0 18 0v6c-6.954 0-12 5.046-12 14h12v12H0zm22 0V20C22 8.954 28.954 0 40 0v6c-6.954 0-12 5.046-12 14h12v12H22z" fill="url(#qg)"/>
+      <defs><linearGradient id="qg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f9a603"/><stop offset="100%" stop-color="#d15cfe"/></linearGradient></defs>
+    </svg>
+
+    <div class="quote-text">
+      "Pasamos de <span class="acc">14 a 38 reuniones cualificadas</span> en 60 días.<br>
+      Lo más parecido a haber contratado tres SDRs sin gastarme un euro en ellos."
+    </div>
+
+    <div class="quote-author">
+      <div class="ph">ML</div>
+      <div style="text-align:left;">
+        <div class="nm">Marcos Llanos</div>
+        <div class="ro">Director Comercial · Atlas Retail</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="section alt" id="precios">
+  <div class="wrap">
+    <div class="section-head centered">
+      <span class="h-eyebrow"><span class="d"></span> Precios</span>
+      <h2>Pagas por reuniones,<br><span class="serif">no por software.</span></h2>
+      <p>Sin contratos anuales obligatorios. Si no agendas reuniones el primer mes, te devolvemos el dinero.</p>
+    </div>
+
+    <div class="price-grid">
+      <div class="price-card">
+        <div class="plan">Starter</div>
+        <div class="desc">Para founders y equipos pequeños que empiezan a hacer outbound.</div>
+        <div class="price">
+          <span class="amt">€290</span>
+          <span class="unit">/ mes</span>
+        </div>
+        <ul>
+          <li><span class="ck">✓</span> Hasta 1.000 prospectos / mes</li>
+          <li><span class="ck">✓</span> ICP Engine básico</li>
+          <li><span class="ck">✓</span> Secuencias email</li>
+          <li><span class="ck">✓</span> 1 bandeja conectada</li>
+          <li><span class="ck">✓</span> Reporting semanal</li>
+        </ul>
+        <a href="/login" class="btn btn-ghost cta" style="width:100%;justify-content:center;">Empezar gratis</a>
+      </div>
+
+      <div class="price-card featured">
+        <div class="badge-feat">Más elegido</div>
+        <div class="plan">Growth</div>
+        <div class="desc">Para equipos comerciales que necesitan pipeline predecible cada semana.</div>
+        <div class="price">
+          <span class="amt">€890</span>
+          <span class="unit">/ mes</span>
+        </div>
+        <ul>
+          <li><span class="ck">✓</span> Hasta 5.000 prospectos / mes</li>
+          <li><span class="ck">✓</span> ICP Engine avanzado + gemelos</li>
+          <li><span class="ck">✓</span> Multi-canal (email + LinkedIn)</li>
+          <li><span class="ck">✓</span> 5 bandejas + warmup incluido</li>
+          <li><span class="ck">✓</span> Booking automático en calendario</li>
+          <li><span class="ck">✓</span> Integración HubSpot · Salesforce</li>
+          <li><span class="ck">✓</span> Customer Success dedicado</li>
+        </ul>
+        <a href="/login" class="btn btn-brand cta" style="width:100%;justify-content:center;">Empezar 14 días gratis</a>
+      </div>
+
+      <div class="price-card">
+        <div class="plan">Scale</div>
+        <div class="desc">Para empresas con varios equipos comerciales y necesidades complejas.</div>
+        <div class="price">
+          <span class="amt">A medida</span>
+        </div>
+        <ul>
+          <li><span class="ck">✓</span> Prospectos ilimitados</li>
+          <li><span class="ck">✓</span> Multi-equipo y multi-marca</li>
+          <li><span class="ck">✓</span> Bandejas ilimitadas</li>
+          <li><span class="ck">✓</span> SDR humano dedicado opcional</li>
+          <li><span class="ck">✓</span> SLA 99.9% y SOC2</li>
+          <li><span class="ck">✓</span> Onboarding white-glove</li>
+        </ul>
+        <a href="#cta" class="btn btn-dark cta" style="width:100%;justify-content:center;">Hablar con ventas</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="final-cta" id="cta">
+  <div class="wrap inner">
+    <span class="h-eyebrow" style="background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.10);color:rgba(255,255,255,0.92);"><span class="d"></span> Sin tarjeta · cancela cuando quieras</span>
+    <h2 style="margin-top:20px;">El próximo cliente <span class="serif" style="background:none;-webkit-text-fill-color:white;">ideal</span><br>está a un <span class="acc">email</span> de distancia.</h2>
+    <p>Activa tu primera campaña en 8 minutos. Si en 30 días no has agendado al menos 10 reuniones cualificadas, te devolvemos lo invertido.</p>
+    <div class="cta-row">
+      <a class="btn btn-brand" href="/login">Empezar gratis 14 días <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></a>
+      <a class="btn btn-ghost" href="/login">Ver una demo guiada</a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <div class="col1">
+        <a href="#" class="brand">onepulso<span class="dots"><span class="d"></span><span class="d b"></span></span></a>
+        <p>Cold email que llega al cliente ideal. Hecho para equipos comerciales que valoran su tiempo.</p>
+        <div style="display:flex;gap:8px;">
+          <a href="#" style="width:34px;height:34px;border-radius:8px;background:var(--paper);border:1px solid var(--line);display:grid;place-items:center;color:var(--ink-3);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/></svg>
+          </a>
+          <a href="#" style="width:34px;height:34px;border-radius:8px;background:var(--paper);border:1px solid var(--line);display:grid;place-items:center;color:var(--ink-3);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+          </a>
+          <a href="#" style="width:34px;height:34px;border-radius:8px;background:var(--paper);border:1px solid var(--line);display:grid;place-items:center;color:var(--ink-3);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          </a>
+        </div>
+      </div>
+      <div>
+        <h4>Producto</h4>
+        <ul>
+          <li><a href="#producto">ICP Engine</a></li>
+          <li><a href="#producto">Secuencias</a></li>
+          <li><a href="#producto">Booking</a></li>
+          <li><a href="#producto">Atribución</a></li>
+          <li><a href="#producto">Integraciones</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Casos de uso</h4>
+        <ul>
+          <li><a href="#">Founders B2B</a></li>
+          <li><a href="#">Equipos de Sales</a></li>
+          <li><a href="#">Agencias</a></li>
+          <li><a href="#">Account Executives</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Recursos</h4>
+        <ul>
+          <li><a href="#">Blog</a></li>
+          <li><a href="#">Plantillas de email</a></li>
+          <li><a href="#">Calculadora de pipeline</a></li>
+          <li><a href="#">Academia OnePulso</a></li>
+          <li><a href="#">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Empresa</h4>
+        <ul>
+          <li><a href="#">Sobre nosotros</a></li>
+          <li><a href="#">Clientes</a></li>
+          <li><a href="#">Empleo · 4 vacantes</a></li>
+          <li><a href="#">Prensa</a></li>
+          <li><a href="#">Contacto</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <div>© 2026 OnePulso, S.L. · Hecho en Madrid 🇪🇸</div>
+      <div style="display:flex;gap:18px;">
+        <a href="#">Privacidad</a>
+        <a href="#">Términos</a>
+        <a href="#">Seguridad</a>
+        <a href="#">Estado · Operativo</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+<script>
+  // Nav scrolled state
+  const nav = document.getElementById('nav');
+  const onScroll = () => nav.classList.toggle('scrolled', window.scrollY > 8);
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // Simple reveal on scroll
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target); } });
+  }, { rootMargin: '0px 0px -10% 0px' });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>
