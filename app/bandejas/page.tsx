@@ -98,6 +98,7 @@ export default function BandejasPage() {
   const [selectedSent, setSelectedSent] = useState<SentMessage | null>(null);
   const [loadingSent, setLoadingSent] = useState(false);
   const [accountFilter, setAccountFilter] = useState<string | null>(null);
+  const [showAccountStatus, setShowAccountStatus] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -384,20 +385,20 @@ export default function BandejasPage() {
             </div>
           )}
 
-          {accounts.length > 1 && (
-            <select
-              value={accountFilter || ""}
-              onChange={(e) => setAccountFilter(e.target.value || null)}
-              style={{ ...inputStyle, height: 38, width: "auto", minWidth: 180 }}
-            >
-              <option value="">Todas las cuentas</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.email} ({a.messages_count})</option>
-              ))}
-            </select>
-          )}
-
           <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
+            <button
+              onClick={() => setShowAccountStatus((v) => !v)}
+              style={{
+                ...ghostBtn, height: 38,
+                background: showAccountStatus ? "rgba(154,105,245,0.08)" : PAPER,
+                borderColor: showAccountStatus ? "rgba(154,105,245,0.4)" : LINE2,
+                color: showAccountStatus ? PURPLE_DEEP : INK_2,
+              }}
+              title="Ver estado IMAP de cada cuenta conectada"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
+              Estado IMAP ({accounts.filter((a) => a.imap_ok).length}/{accounts.length})
+            </button>
             <span style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               padding: "5px 10px 5px 8px",
@@ -423,6 +424,122 @@ export default function BandejasPage() {
             </button>
           </div>
         </div>
+
+        {/* Pills horizontales — TODAS las cuentas siempre visibles, con scroll horizontal si hay muchas */}
+        {accounts.length > 0 && (
+          <div style={{
+            marginTop: 10,
+            display: "flex", gap: 6, alignItems: "center",
+            padding: "10px 14px",
+            background: PAPER, border: `1px solid ${LINE}`, borderRadius: 12,
+            overflowX: "auto",
+          }}>
+            <span style={{ fontSize: 11, color: INK_4, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0, marginRight: 4 }}>
+              Cuenta:
+            </span>
+            <button
+              onClick={() => setAccountFilter(null)}
+              style={{
+                ...accountPill(accountFilter === null),
+                flexShrink: 0,
+              }}
+            >
+              Todas
+              <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, background: accountFilter === null ? "rgba(255,255,255,0.22)" : SURF, color: accountFilter === null ? "#fff" : INK_4, fontFamily: FONT_MONO, fontSize: 10.5, fontWeight: 700 }}>
+                {accounts.reduce((s, a) => s + a.messages_count, 0)}
+              </span>
+            </button>
+            {accounts.map((a) => {
+              const on = accountFilter === a.id;
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => setAccountFilter(a.id)}
+                  style={{ ...accountPill(on), flexShrink: 0 }}
+                  title={`${a.email} · ${a.imap_ok ? "IMAP OK" : "IMAP error"}`}
+                >
+                  <span style={{
+                    width: 6, height: 6, borderRadius: "50%",
+                    background: a.imap_ok ? GREEN : "#c12530",
+                    flexShrink: 0,
+                  }} />
+                  {a.email.split("@")[0]}
+                  <span style={{ color: INK_5, fontSize: 11 }}>@{a.email.split("@")[1]}</span>
+                  <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 999, background: on ? "rgba(255,255,255,0.22)" : SURF, color: on ? "#fff" : INK_4, fontFamily: FONT_MONO, fontSize: 10.5, fontWeight: 700 }}>
+                    {a.messages_count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Panel desplegable: estado IMAP detallado por cuenta */}
+        {showAccountStatus && (
+          <div style={{
+            marginTop: 10, padding: "16px 18px",
+            background: PAPER, border: "1px solid rgba(154,105,245,0.22)",
+            borderRadius: 12,
+          }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+              <div>
+                <h3 style={{ margin: 0, fontFamily: FONT_SANS, fontWeight: 700, fontSize: 16, color: INK }}>
+                  Estado IMAP por cuenta
+                </h3>
+                <p style={{ margin: "4px 0 0", color: INK_3, fontSize: 12.5 }}>
+                  Cada cuenta conectada se sincroniza por IMAP cada 2 min. Aquí ves cuándo fue su último sync y si hubo error.
+                </p>
+              </div>
+              <button onClick={() => setShowAccountStatus(false)} style={{ background: "transparent", border: 0, color: INK_4, cursor: "pointer", fontSize: 18, padding: 4 }}>×</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+              {accounts.length === 0 && (
+                <div style={{ color: INK_4, fontSize: 13 }}>
+                  No hay cuentas conectadas. <a href="/connect-accounts" style={{ color: PURPLE_DEEP, fontWeight: 600 }}>Conecta la primera →</a>
+                </div>
+              )}
+              {accounts.map((a) => {
+                const meta = a.meta || { last_sync: null, last_error: null, total_messages: 0 };
+                const lastSyncAge = meta.last_sync
+                  ? Math.round((Date.now() - new Date(meta.last_sync).getTime()) / 60000)
+                  : null;
+                return (
+                  <div key={a.id} style={{
+                    padding: "10px 12px",
+                    background: a.imap_ok ? SURF : "rgba(255,51,68,0.05)",
+                    border: `1px solid ${a.imap_ok ? LINE : "rgba(255,51,68,0.2)"}`,
+                    borderRadius: 10,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600, color: INK }}>
+                      <span style={{
+                        width: 7, height: 7, borderRadius: "50%",
+                        background: a.imap_ok ? GREEN : "#c12530",
+                      }} />
+                      {a.email}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 11, color: INK_4, fontFamily: FONT_MONO, lineHeight: 1.6 }}>
+                      <div>Mensajes: <strong style={{ color: INK_2 }}>{a.messages_count}</strong></div>
+                      <div>Último sync: <strong style={{ color: INK_2 }}>
+                        {lastSyncAge === null ? "nunca" : lastSyncAge === 0 ? "hace <1 min" : `hace ${lastSyncAge} min`}
+                      </strong></div>
+                      {meta.last_error && (
+                        <div style={{ color: "#c12530", marginTop: 4, fontFamily: FONT_UI, fontSize: 11 }}>
+                          ⚠ {meta.last_error.slice(0, 120)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, color: INK_4 }}>
+              <span>Total: {accounts.length} cuentas · {accounts.filter((a) => a.imap_ok).length} con IMAP OK · {accounts.reduce((s, a) => s + a.messages_count, 0)} mensajes en bandeja</span>
+              <a href="/connect-accounts" style={{ color: PURPLE_DEEP, fontWeight: 600, textDecoration: "none" }}>
+                Gestionar cuentas →
+              </a>
+            </div>
+          </div>
+        )}
 
         {syncSummary && (
           <div style={{
@@ -1147,4 +1264,15 @@ const segBtn = (on: boolean): React.CSSProperties => ({
   color: on ? INK : INK_3,
   fontWeight: 600, fontSize: 12.5, fontFamily: FONT_UI, cursor: "pointer",
   boxShadow: on ? "0 1px 2px rgba(10,13,20,0.06)" : "none",
+});
+
+const accountPill = (on: boolean): React.CSSProperties => ({
+  display: "inline-flex", alignItems: "center", gap: 6,
+  height: 30, padding: "0 12px", borderRadius: 999,
+  border: on ? `1.5px solid ${PURPLE}` : `1px solid ${LINE2}`,
+  background: on ? PURPLE_DEEP : "#fff",
+  color: on ? "#fff" : INK_2,
+  fontWeight: 600, fontSize: 12.5, fontFamily: FONT_UI, cursor: "pointer",
+  whiteSpace: "nowrap",
+  transition: "all .15s",
 });
