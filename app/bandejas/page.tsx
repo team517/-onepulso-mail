@@ -474,73 +474,6 @@ export default function BandejasPage() {
           </div>
         )}
 
-        {/* Panel desplegable: estado IMAP detallado por cuenta */}
-        {showAccountStatus && (
-          <div style={{
-            marginTop: 10, padding: "16px 18px",
-            background: PAPER, border: "1px solid rgba(154,105,245,0.22)",
-            borderRadius: 12,
-          }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
-              <div>
-                <h3 style={{ margin: 0, fontFamily: FONT_SANS, fontWeight: 700, fontSize: 16, color: INK }}>
-                  Estado IMAP por cuenta
-                </h3>
-                <p style={{ margin: "4px 0 0", color: INK_3, fontSize: 12.5 }}>
-                  Cada cuenta conectada se sincroniza por IMAP cada 2 min. Aquí ves cuándo fue su último sync y si hubo error.
-                </p>
-              </div>
-              <button onClick={() => setShowAccountStatus(false)} style={{ background: "transparent", border: 0, color: INK_4, cursor: "pointer", fontSize: 18, padding: 4 }}>×</button>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
-              {accounts.length === 0 && (
-                <div style={{ color: INK_4, fontSize: 13 }}>
-                  No hay cuentas conectadas. <a href="/connect-accounts" style={{ color: PURPLE_DEEP, fontWeight: 600 }}>Conecta la primera →</a>
-                </div>
-              )}
-              {accounts.map((a) => {
-                const meta = a.meta || { last_sync: null, last_error: null, total_messages: 0 };
-                const lastSyncAge = meta.last_sync
-                  ? Math.round((Date.now() - new Date(meta.last_sync).getTime()) / 60000)
-                  : null;
-                return (
-                  <div key={a.id} style={{
-                    padding: "10px 12px",
-                    background: a.imap_ok ? SURF : "rgba(255,51,68,0.05)",
-                    border: `1px solid ${a.imap_ok ? LINE : "rgba(255,51,68,0.2)"}`,
-                    borderRadius: 10,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600, color: INK }}>
-                      <span style={{
-                        width: 7, height: 7, borderRadius: "50%",
-                        background: a.imap_ok ? GREEN : "#c12530",
-                      }} />
-                      {a.email}
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 11, color: INK_4, fontFamily: FONT_MONO, lineHeight: 1.6 }}>
-                      <div>Mensajes: <strong style={{ color: INK_2 }}>{a.messages_count}</strong></div>
-                      <div>Último sync: <strong style={{ color: INK_2 }}>
-                        {lastSyncAge === null ? "nunca" : lastSyncAge === 0 ? "hace <1 min" : `hace ${lastSyncAge} min`}
-                      </strong></div>
-                      {meta.last_error && (
-                        <div style={{ color: "#c12530", marginTop: 4, fontFamily: FONT_UI, fontSize: 11 }}>
-                          ⚠ {meta.last_error.slice(0, 120)}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, color: INK_4 }}>
-              <span>Total: {accounts.length} cuentas · {accounts.filter((a) => a.imap_ok).length} con IMAP OK · {accounts.reduce((s, a) => s + a.messages_count, 0)} mensajes en bandeja</span>
-              <a href="/connect-accounts" style={{ color: PURPLE_DEEP, fontWeight: 600, textDecoration: "none" }}>
-                Gestionar cuentas →
-              </a>
-            </div>
-          </div>
-        )}
-
         {syncSummary && (
           <div style={{
             marginTop: 10, padding: "10px 14px",
@@ -824,10 +757,124 @@ export default function BandejasPage() {
         div:hover > div > .row-delete-btn { opacity: 0.7 !important; }
         .row-delete-btn:hover { opacity: 1 !important; color: #c12530 !important; }
       `}</style>
+
+      {/* Modal flotante: Estado IMAP por cuenta */}
+      {showAccountStatus && (
+        <AccountStatusModal
+          accounts={accounts}
+          onClose={() => setShowAccountStatus(false)}
+        />
+      )}
+
       {ToastNode}
     </div>
   );
 }
+
+/** Modal flotante con la tabla de estado IMAP por cuenta. Compacto — tabla con
+ *  scroll vertical en vez de cards gigantes. */
+function AccountStatusModal({ accounts, onClose }: {
+  accounts: AccountSummary[]; onClose: () => void;
+}) {
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(10,13,20,0.42)",
+      backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 200, padding: 24,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: PAPER, borderRadius: 18, width: "100%", maxWidth: 760,
+        maxHeight: "85vh", display: "flex", flexDirection: "column",
+        boxShadow: "0 30px 90px rgba(10,13,20,0.28)", overflow: "hidden",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "18px 22px", borderBottom: `1px solid ${LINE}`,
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14,
+        }}>
+          <div>
+            <h2 style={{ margin: 0, fontFamily: FONT_SANS, fontWeight: 700, fontSize: 18, letterSpacing: "-0.02em", color: INK }}>
+              Estado IMAP por cuenta
+            </h2>
+            <p style={{ margin: "4px 0 0", color: INK_3, fontSize: 12.5 }}>
+              Sincronización automática cada 2 min · {accounts.filter((a) => a.imap_ok).length} OK · {accounts.length - accounts.filter((a) => a.imap_ok).length} con error
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: 0, color: INK_4, cursor: "pointer", fontSize: 20, padding: 4, lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Tabla compacta */}
+        <div style={{ overflow: "auto", flex: 1 }}>
+          {accounts.length === 0 ? (
+            <div style={{ padding: 40, textAlign: "center", color: INK_4, fontSize: 13.5 }}>
+              No hay cuentas conectadas.{" "}
+              <a href="/connect-accounts" style={{ color: PURPLE_DEEP, fontWeight: 600 }}>Conecta la primera →</a>
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead style={{ position: "sticky", top: 0, background: SURF, zIndex: 1 }}>
+                <tr>
+                  <th style={statusTh}></th>
+                  <th style={statusTh}>Cuenta</th>
+                  <th style={{ ...statusTh, textAlign: "right" }}>Msgs</th>
+                  <th style={{ ...statusTh, textAlign: "right" }}>Último sync</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((a) => {
+                  const meta = a.meta || { last_sync: null, last_error: null, total_messages: 0 };
+                  const lastSyncAge = meta.last_sync
+                    ? Math.round((Date.now() - new Date(meta.last_sync).getTime()) / 60000)
+                    : null;
+                  return (
+                    <tr key={a.id} style={{ borderTop: `1px solid ${LINE}` }}>
+                      <td style={{ padding: "8px 12px", width: 24 }}>
+                        <span style={{
+                          display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+                          background: a.imap_ok ? GREEN : "#c12530",
+                        }} />
+                      </td>
+                      <td style={{ padding: "8px 12px" }}>
+                        <div style={{ fontWeight: 600, color: INK, fontSize: 12.5 }}>{a.email}</div>
+                        {meta.last_error && (
+                          <div style={{ color: "#c12530", fontSize: 10.5, marginTop: 2 }}>⚠ {meta.last_error.slice(0, 90)}</div>
+                        )}
+                      </td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: FONT_MONO, color: INK_2 }}>
+                        {a.messages_count}
+                      </td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: FONT_MONO, color: INK_4, fontSize: 11 }}>
+                        {lastSyncAge === null ? "nunca" : lastSyncAge === 0 ? "<1 min" : `${lastSyncAge} min`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding: "12px 22px", borderTop: `1px solid ${LINE}`, background: SURF,
+          display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: INK_4,
+        }}>
+          <span>Total: <strong style={{ color: INK_2 }}>{accounts.reduce((s, a) => s + a.messages_count, 0)}</strong> mensajes en bandeja</span>
+          <a href="/connect-accounts" style={{ color: PURPLE_DEEP, fontWeight: 600, textDecoration: "none" }}>
+            Gestionar cuentas →
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const statusTh: React.CSSProperties = {
+  textAlign: "left", padding: "10px 12px",
+  fontSize: 10.5, fontWeight: 700, color: INK_4,
+  textTransform: "uppercase", letterSpacing: "0.06em",
+};
 
 /** Vista de mensajes ENVIADOS: lista a la izquierda + detalle a la derecha. */
 function SentView({
