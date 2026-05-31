@@ -29,7 +29,9 @@ import {
 import { writeJson } from "@/lib/storage";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Sin maxDuration estricto — corre en Node runtime (Docker / Railway) que no
+// tiene timeout por función. Suficiente para lotes grandes (cientos de cuentas).
+export const maxDuration = 600;
 
 type VerifyResult = {
   email: string;
@@ -257,12 +259,12 @@ export async function POST(req: NextRequest) {
   if (accounts.length === 0) {
     return NextResponse.json({ error: "Lista de cuentas vacía" }, { status: 400 });
   }
-  if (accounts.length > 100) {
-    return NextResponse.json({ error: "Máximo 100 cuentas por lote" }, { status: 400 });
-  }
+  // Sin límite duro de cuentas — la concurrencia (10 en paralelo) regula la
+  // carga sobre el server. 1000 cuentas tardarán ~5-8 min pero no fallan.
 
   const t0 = Date.now();
-  const rawResults = (await runWithConcurrency(accounts, 5, processOne)) as (VerifyResult & { _accountFull?: EmailAccount })[];
+  // Concurrencia 10 (antes 5) para que los lotes grandes vayan más rápido
+  const rawResults = (await runWithConcurrency(accounts, 10, processOne)) as (VerifyResult & { _accountFull?: EmailAccount })[];
 
   // Persistencia atómica: leemos la lista actual, mergeamos por email, escribimos UNA vez.
   // Así evitamos race conditions cuando 5 cuentas escriben en paralelo.
