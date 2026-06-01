@@ -383,7 +383,7 @@ export default function ConnectAccountsPage() {
             <NavLink active>Cuentas</NavLink>
             <NavLink onClick={() => router.push("/email-campaigns")}>Campañas</NavLink>
             <NavLink onClick={() => router.push("/bandejas")}>Bandejas</NavLink>
-            <NavLink onClick={() => showToast("Plantillas · próximamente")}>Plantillas</NavLink>
+            <NavLink onClick={() => router.push("/plantillas")}>Plantillas</NavLink>
             <NavLink onClick={() => router.push("/logs")}>Logs</NavLink>
             <NavLink onClick={() => showToast("Configuración · próximamente")}>Configuración</NavLink>
           </div>

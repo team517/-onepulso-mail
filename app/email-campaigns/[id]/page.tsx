@@ -707,6 +707,7 @@ function SequencesTab({ campaign, setCampaign, toast }: { campaign: Campaign; se
   const [activeVariantIdx, setActiveVariantIdx] = useState(0);
   const [preview, setPreview] = useState<{ subject: string; body: string; lead_email?: string } | null>(null);
   const [showSendTest, setShowSendTest] = useState(false);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const savingTimerRef = useRef<any>(null);
 
   const step = campaign.steps[activeStepIdx];
@@ -966,6 +967,10 @@ function SequencesTab({ campaign, setCampaign, toast }: { campaign: Campaign; se
 
 
           <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => setShowTemplatePicker(true)} style={ghostBtn} title="Cargar plantilla guardada en este variant">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              Usar plantilla
+            </button>
             <button onClick={duplicateVariant} style={ghostBtn}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               Duplicar variante
@@ -973,6 +978,24 @@ function SequencesTab({ campaign, setCampaign, toast }: { campaign: Campaign; se
             <button onClick={() => setShowSendTest(true)} style={brandBtn}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               Enviar test
+            </button>
+            <button
+              onClick={async () => {
+                if (!variant.subject && !variant.body) { toast("Variante vacía — escribe algo antes de guardar"); return; }
+                const name = prompt("Nombre de la plantilla:", `Step ${activeStepIdx + 1} · ${variant.label}`);
+                if (!name) return;
+                const r = await fetch("/api/email-templates", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name, subject: variant.subject, body: variant.body }),
+                });
+                const j = await r.json();
+                if (j.ok) toast(`✓ Guardada como plantilla "${j.template.name}"`);
+              }}
+              style={ghostBtn}
+              title="Guarda esta variante como plantilla reutilizable"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Guardar como plantilla
             </button>
             <div style={{ marginLeft: "auto", alignSelf: "center", fontSize: 11.5, color: INK_5, fontFamily: FONT_MONO }}>
               Auto-guardado · {variant.body.length} caracteres
@@ -1028,7 +1051,135 @@ function SequencesTab({ campaign, setCampaign, toast }: { campaign: Campaign; se
           toast={toast}
         />
       )}
+
+      {showTemplatePicker && step && variant && (
+        <TemplatePickerModal
+          onClose={() => setShowTemplatePicker(false)}
+          onPick={async (tpl) => {
+            // Aplica plantilla a la variante actual (subject + body)
+            onChangeContent("subject", tpl.subject);
+            onChangeContent("body", tpl.body);
+            // Marca usado
+            fetch(`/api/email-templates/${tpl.id}`, { method: "POST" }).catch(() => {});
+            setShowTemplatePicker(false);
+            toast(`✓ Plantilla "${tpl.name}" aplicada a la variante ${variant.label}`);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Modal para elegir plantilla y aplicarla a la variante activa. */
+function TemplatePickerModal({ onClose, onPick }: {
+  onClose: () => void;
+  onPick: (tpl: { id: string; name: string; subject: string; body: string }) => Promise<void>;
+}) {
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<any | null>(null);
+
+  useEffect(() => {
+    fetch("/api/email-templates")
+      .then((r) => r.json())
+      .then((j) => setTemplates(j.templates || []))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = templates.filter((t) =>
+    !search ||
+    t.name.toLowerCase().includes(search.toLowerCase()) ||
+    t.subject.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <ModalShell
+      title="Usar plantilla"
+      subtitle="Selecciona una plantilla guardada para aplicarla a esta variante (sustituye asunto y cuerpo)."
+      onClose={onClose}
+      width={920}
+      footer={
+        <>
+          <button onClick={onClose} style={ghostBtn}>Cancelar</button>
+          <button
+            disabled={!selected}
+            onClick={() => selected && onPick(selected)}
+            style={{ ...brandBtn, opacity: selected ? 1 : 0.55 }}
+          >
+            Aplicar plantilla
+          </button>
+        </>
+      }
+    >
+      <div style={{ marginBottom: 14 }}>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar plantilla por nombre o asunto…"
+          style={inputStyle}
+          autoFocus
+        />
+      </div>
+
+      {loading ? (
+        <div style={{ color: INK_4, padding: 20 }}>Cargando plantillas…</div>
+      ) : templates.length === 0 ? (
+        <div style={{ padding: 32, textAlign: "center", color: INK_4 }}>
+          <p style={{ fontSize: 13.5, marginBottom: 14 }}>No tienes plantillas todavía.</p>
+          <a href="/plantillas" style={{ ...brandBtn, textDecoration: "none" }}>+ Crear plantilla</a>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr", gap: 14, maxHeight: 460 }}>
+          {/* Lista */}
+          <div style={{ overflow: "auto", border: `1px solid ${LINE}`, borderRadius: 10 }}>
+            {filtered.map((t) => {
+              const active = selected?.id === t.id;
+              return (
+                <div key={t.id} onClick={() => setSelected(t)} style={{
+                  padding: "10px 14px", borderBottom: `1px solid ${LINE}`, cursor: "pointer",
+                  background: active ? "rgba(154,105,245,0.08)" : "#fff",
+                  borderLeft: active ? `3px solid ${PURPLE}` : "3px solid transparent",
+                }}>
+                  <div style={{ fontWeight: 700, color: INK, fontSize: 13.5 }}>{t.name}</div>
+                  <div style={{ fontSize: 12, color: INK_4, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {t.subject || <span style={{ fontStyle: "italic" }}>(sin asunto)</span>}
+                  </div>
+                  {t.category && (
+                    <span style={{ display: "inline-block", marginTop: 4, padding: "1px 7px", borderRadius: 999, background: SURF, color: PURPLE_DEEP, fontSize: 10, fontWeight: 600 }}>{t.category}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Preview */}
+          <div style={{ overflow: "auto", padding: 14, background: SURF, borderRadius: 10, border: `1px solid ${LINE}` }}>
+            {!selected ? (
+              <div style={{ color: INK_4, fontSize: 13, padding: 20, textAlign: "center" }}>
+                Selecciona una plantilla para ver el preview.
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: INK_4, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Asunto</div>
+                <div style={{ fontFamily: FONT_SANS, fontWeight: 600, fontSize: 15, color: INK, marginBottom: 14, lineHeight: 1.3 }}>
+                  {selected.subject || <span style={{ color: INK_5, fontWeight: 400 }}>(vacío)</span>}
+                </div>
+                <div style={{ fontSize: 12, color: INK_4, marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Cuerpo</div>
+                <pre style={{
+                  whiteSpace: "pre-wrap", wordBreak: "break-word",
+                  fontFamily: FONT_UI, fontSize: 13.5, lineHeight: 1.55, color: INK_2,
+                  margin: 0, padding: 0,
+                }}>{selected.body || "(vacío)"}</pre>
+                <div style={{ marginTop: 12, fontSize: 11, color: INK_5, fontFamily: FONT_MONO }}>
+                  Usada {selected.used_count} {selected.used_count === 1 ? "vez" : "veces"}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }
 
