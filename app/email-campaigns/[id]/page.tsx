@@ -338,6 +338,140 @@ function OverviewTab({ campaign }: { campaign: Campaign }) {
       <p style={{ marginTop: 18, fontSize: 12.5, color: INK_5, fontFamily: FONT_MONO }}>
         Las métricas se actualizan cuando el worker de envíos procesa los pasos. Activa la campaña para empezar.
       </p>
+
+      {/* Activity log — timeline de eventos */}
+      <ActivityLog campaignId={campaign.id} />
+    </div>
+  );
+}
+
+/** Timeline de eventos de la campaña: envíos, respuestas, bounces, unsubs. */
+function ActivityLog({ campaignId }: { campaignId: string }) {
+  const [events, setEvents] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<"all" | "sent" | "send_failed" | "replied" | "bounced" | "unsubscribed">("all");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/email-campaigns/${campaignId}/activity?limit=300`);
+      const j = await r.json();
+      setEvents(j.events || []);
+      setSummary(j.summary || null);
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [campaignId]);
+  useEffect(() => {
+    const h = setInterval(load, 30_000); // refresh cada 30s
+    return () => clearInterval(h);
+  }, [campaignId]);
+
+  const filtered = filter === "all" ? events : events.filter((e) => e.type === filter);
+
+  return (
+    <div style={{ ...cardStyle, marginTop: 24, padding: 0 }}>
+      <div style={{ padding: "16px 20px", borderBottom: `1px solid ${LINE}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ ...cardTitle, margin: 0 }}>Actividad</h3>
+          <p style={{ margin: "4px 0 0", color: INK_3, fontSize: 12 }}>
+            Cada envío, respuesta, bounce y unsub de esta campaña. Refresca cada 30s.
+          </p>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {(["all","sent","send_failed","replied","bounced","unsubscribed"] as const).map((f) => {
+            const count = f === "all"
+              ? events.length
+              : (summary?.[f] || 0);
+            return (
+              <button key={f} onClick={() => setFilter(f)} style={{
+                padding: "5px 10px", borderRadius: 999,
+                border: filter === f ? `1.5px solid ${PURPLE}` : `1px solid ${LINE2}`,
+                background: filter === f ? "rgba(154,105,245,0.10)" : "#fff",
+                color: filter === f ? PURPLE_DEEP : INK_3,
+                fontWeight: 600, fontSize: 11.5, fontFamily: FONT_UI, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 5,
+              }}>
+                {f === "all" ? "Todos" :
+                 f === "sent" ? "Enviados" :
+                 f === "send_failed" ? "Fallidos" :
+                 f === "replied" ? "Respondidos" :
+                 f === "bounced" ? "Bounces" :
+                 "Unsubs"}
+                <span style={{ fontFamily: FONT_MONO, fontSize: 10.5, color: INK_4 }}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 32, color: INK_4, fontSize: 13.5 }}>Cargando actividad…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ padding: "48px 24px", textAlign: "center", color: INK_4, fontSize: 13.5 }}>
+          {events.length === 0
+            ? "Sin actividad todavía. Activa la campaña y verás aquí cada envío en tiempo real."
+            : "Sin eventos con este filtro."}
+        </div>
+      ) : (
+        <div style={{ maxHeight: 420, overflow: "auto" }}>
+          {filtered.map((e) => (
+            <ActivityEntry key={e.id} event={e} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivityEntry({ event: e }: { event: any }) {
+  const config: Record<string, { icon: React.ReactNode; color: string; label: string; bg: string }> = {
+    sent:         { icon: "✉", color: GREEN, label: "Enviado", bg: "rgba(31,138,91,0.08)" },
+    send_failed:  { icon: "✗", color: "#c12530", label: "Falló envío", bg: "rgba(255,51,68,0.08)" },
+    replied:      { icon: "↩", color: PURPLE_DEEP, label: "Respondió", bg: "rgba(154,105,245,0.10)" },
+    bounced:      { icon: "⚠", color: "#c12530", label: "Bounce", bg: "rgba(255,51,68,0.08)" },
+    unsubscribed: { icon: "⊘", color: "#b97500", label: "Unsubscribe", bg: "rgba(249,166,3,0.10)" },
+    completed:    { icon: "✓", color: GREEN, label: "Secuencia completa", bg: "rgba(31,138,91,0.08)" },
+  };
+  const c = config[e.type] || config.sent;
+  const ageMin = Math.round((Date.now() - new Date(e.at).getTime()) / 60000);
+  const ageStr = ageMin < 1 ? "ahora" : ageMin < 60 ? `${ageMin} min` : ageMin < 1440 ? `${Math.round(ageMin / 60)} h` : `${Math.round(ageMin / 1440)} d`;
+
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: "28px 1fr auto",
+      gap: 12, alignItems: "center",
+      padding: "11px 18px", borderTop: `1px solid ${LINE}`,
+      fontSize: 13,
+    }}>
+      <div style={{
+        width: 24, height: 24, borderRadius: "50%",
+        background: c.bg, color: c.color,
+        display: "grid", placeItems: "center", fontWeight: 700, fontSize: 13,
+      }}>{c.icon}</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: c.color, fontWeight: 700, fontSize: 12 }}>{c.label}</span>
+          <span style={{ color: INK_2, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {e.lead_email || "—"}
+          </span>
+          {e.step && (
+            <span style={{
+              padding: "1px 7px", borderRadius: 999,
+              background: SURF, color: INK_3, fontSize: 11, fontWeight: 600, fontFamily: FONT_MONO,
+            }}>Step {e.step}{e.variant ? ` · ${e.variant}` : ""}</span>
+          )}
+        </div>
+        <div style={{ fontSize: 11.5, color: INK_4, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {e.subject && <span>"{e.subject.slice(0, 80)}"</span>}
+          {e.account_email && <span style={{ fontFamily: FONT_MONO, marginLeft: 6 }}>· vía {e.account_email}</span>}
+          {e.error && <span style={{ color: "#c12530", marginLeft: 6 }}>· {e.error.slice(0, 80)}</span>}
+          {e.reason && !e.error && <span style={{ marginLeft: 6 }}>· {e.reason.slice(0, 80)}</span>}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: INK_4, fontFamily: FONT_MONO, whiteSpace: "nowrap" }} title={new Date(e.at).toLocaleString("es-ES")}>
+        hace {ageStr}
+      </div>
     </div>
   );
 }

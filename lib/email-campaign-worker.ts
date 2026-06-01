@@ -27,6 +27,7 @@ import {
 } from "./email-campaigns";
 import { EmailAccount, listEmailAccounts, upsertEmailAccount, getEmailAccount } from "./email-accounts";
 import { syncAllInboxes } from "./email-inbox-sync";
+import { detectRepliesForAccounts } from "./email-reply-detector";
 import { listFollowUps, updateFollowUp } from "./email-followups";
 import { listMessagesForAccount } from "./email-inbox-store";
 import { sendThreadReply } from "./email-thread-send";
@@ -430,6 +431,21 @@ export async function tickWorker() {
             level: "info",
             message: `Sync IMAP: +${totalNew} nuevos, ${totalFiltered} filtrados (warmup/bounce)`,
           });
+        }
+        // Detectar respuestas: si alguno de los nuevos mensajes viene de un lead,
+        // marca el lead como replied → el worker deja de enviarle.
+        if (totalNew > 0) {
+          const det = await detectRepliesForAccounts(accounts.map((a) => a.id));
+          if (det.detections.length > 0) {
+            for (const d of det.detections) {
+              log({
+                level: "info",
+                message: `🟢 Reply detectado de ${d.lead_email} en "${d.campaign_name}"`,
+                campaign_id: d.campaign_id, campaign_name: d.campaign_name,
+                lead_email: d.lead_email, account_email: d.via_account,
+              });
+            }
+          }
         }
       } catch (e: any) {
         log({ level: "warn", message: `Sync IMAP falló: ${e.message}` });
