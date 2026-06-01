@@ -250,45 +250,82 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   // Min/random gap configurables (default 6-9 min)
   const minGap = campaign.options.min_gap_minutes ?? 6;
   const randomGap = campaign.options.random_gap_minutes ?? 3;
+  const dailyLimit = campaign.options.daily_limit_per_account ?? 30;
+  const rotation = campaign.options.account_rotation;
 
-  // Por cada cuenta asignada, intenta UN envío si está elegible
+  /** ¿Está la cuenta lista para mandar AHORA? (no rate-limited + no full daily) */
+  function accountReady(account: EmailAccount): boolean {
+    const s = getAccountState(account.id);
+    if (s.sent_today >= dailyLimit) return false;
+    if (s.next_eligible_at && new Date(s.next_eligible_at) > now) return false;
+    return true;
+  }
+
+  // ── ASIGNACIÓN: Paso 1 — sticky · Paso 2 — round-robin / random
+  type Pair = { account: EmailAccount; candidate: typeof candidates[number] };
+  const planned: Pair[] = [];
+  const usedAccounts = new Set<string>();
+  const usedLeads = new Set<string>();
+
+  // PASO 1: cada cuenta sticky envía a SU lead pegajoso (preserva threading)
   for (const account of assigned) {
+    if (usedAccounts.has(account.id)) continue;
+    if (!accountReady(account)) continue;
+    const target = candidates.find((c) =>
+      c.lead.sticky_account_id === account.id && !usedLeads.has(c.lead.id)
+    );
+    if (target) {
+      planned.push({ account, candidate: target });
+      usedAccounts.add(account.id);
+      usedLeads.add(target.lead.id);
+    }
+  }
+
+  // PASO 2: leads sin sticky → rotación entre cuentas disponibles
+  const freshLeads = candidates.filter((c) => !c.lead.sticky_account_id && !usedLeads.has(c.lead.id));
+  if (freshLeads.length > 0) {
+    let pool: EmailAccount[];
+    if (rotation === "random") {
+      // Shuffle Fisher-Yates → cuenta REAL aleatoria (no la primera del array)
+      pool = assigned.filter((a) => !usedAccounts.has(a.id) && accountReady(a));
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+    } else {
+      // Round-robin: empieza desde cursor + SIN atascarse si la "siguiente"
+      // no está ready. Filtramos por ready ANTES de iterar.
+      const cursor = STATE.rrCursors.get(campaign.id) ?? 0;
+      const startIdx = cursor % assigned.length;
+      pool = assigned.slice(startIdx).concat(assigned.slice(0, startIdx))
+        .filter((a) => !usedAccounts.has(a.id) && accountReady(a));
+    }
+
+    let leadIdx = 0;
+    for (const account of pool) {
+      if (leadIdx >= freshLeads.length) break;
+      const target = freshLeads[leadIdx++];
+      planned.push({ account, candidate: target });
+      usedAccounts.add(account.id);
+      usedLeads.add(target.lead.id);
+    }
+
+    // Avanza el cursor por el número de leads frescos consumidos en este tick
+    if (rotation !== "random") {
+      const cursor = STATE.rrCursors.get(campaign.id) ?? 0;
+      const advanced = planned.filter((p) => !p.candidate.lead.sticky_account_id).length;
+      if (advanced > 0) {
+        STATE.rrCursors.set(campaign.id, (cursor + advanced) % assigned.length);
+      }
+    }
+  }
+
+  // ── EJECUCIÓN: enviamos cada pair
+  for (const { account, candidate: target } of planned) {
+    // Defensa: revisar de nuevo accountReady por si en paralelo cambió
+    if (!accountReady(account)) continue;
+
     const accState = getAccountState(account.id);
-
-    // Daily limit
-    const limit = campaign.options.daily_limit_per_account ?? 30;
-    if (accState.sent_today >= limit) {
-      continue;
-    }
-    // Rate-limit (gap entre envíos)
-    if (accState.next_eligible_at && new Date(accState.next_eligible_at) > now) {
-      continue;
-    }
-
-    // Decide a qué lead asignarle (sticky preferente, luego rotación)
-    // Filtro 1: leads ya pegados a esta cuenta (sticky_account_id == account.id)
-    let target = candidates.find((c) => c.lead.sticky_account_id === account.id);
-
-    // Filtro 2: si no hay stickies, leads sin sticky_account_id (todavía no contactados)
-    if (!target) {
-      // Aplicamos rotación: si esta cuenta es la siguiente en el round-robin, recoge un lead nuevo
-      const rr = STATE.rrCursors.get(campaign.id) ?? 0;
-      const expectedAccount = assigned[rr % assigned.length];
-      if (expectedAccount.id === account.id) {
-        target = candidates.find((c) => !c.lead.sticky_account_id);
-        if (target) {
-          STATE.rrCursors.set(campaign.id, (rr + 1) % assigned.length);
-        }
-      }
-      // Si options.account_rotation === "random", ignoramos round-robin
-      if (!target && campaign.options.account_rotation === "random") {
-        target = candidates.find((c) => !c.lead.sticky_account_id);
-      }
-    }
-
-    if (!target) continue;
-
-    // Envío real
     const sendResult = await sendOne(account, target.lead, target.variant, campaign);
     const nowIso = new Date().toISOString();
 
