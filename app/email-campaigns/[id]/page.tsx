@@ -937,6 +937,69 @@ function SequencesTab({ campaign, setCampaign, toast }: { campaign: Campaign; se
             )}
           </div>
 
+          {/* Distribución de rotación + editor de weight */}
+          {step.variants.length > 1 && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+              padding: "10px 14px", marginBottom: 12,
+              background: SURF, border: `1px solid ${LINE}`, borderRadius: 10,
+              fontSize: 12,
+            }}>
+              <div style={{ fontWeight: 600, color: INK_3, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                A/B rotación
+              </div>
+              {(() => {
+                const eligible = step.variants.filter((v) => (v.subject || "").trim() || (v.body || "").trim());
+                const total = eligible.reduce((s, v) => s + Math.max(1, v.weight), 0) || 1;
+                return step.variants.map((v) => {
+                  const isEmpty = !(v.subject || "").trim() && !(v.body || "").trim();
+                  const pct = isEmpty ? 0 : (Math.max(1, v.weight) / total) * 100;
+                  return (
+                    <div key={v.id} style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      padding: "3px 8px", borderRadius: 6,
+                      background: "#fff", border: `1px solid ${LINE}`,
+                      opacity: isEmpty ? 0.5 : 1,
+                    }} title={isEmpty ? "Variante vacía — no se incluye en rotación" : `${pct.toFixed(1)}% de los leads recibe esta variante`}>
+                      <strong style={{ color: INK }}>{v.label}</strong>
+                      <span style={{ color: INK_4, fontFamily: FONT_MONO, fontSize: 11 }}>
+                        {isEmpty ? "vacía" : `${pct.toFixed(0)}%`}
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 11, color: INK_3, fontWeight: 600 }}>
+                  Peso de <strong style={{ color: PURPLE_DEEP }}>{variant.label}</strong>:
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={variant.weight}
+                  onChange={(e) => {
+                    const w = Math.max(1, Math.min(100, parseInt(e.target.value) || 1));
+                    // Update local + persist
+                    setCampaign((prev) => ({
+                      ...prev,
+                      steps: prev.steps.map((s) => s.id === step.id ? {
+                        ...s,
+                        variants: s.variants.map((vv) => vv.id === variant.id ? { ...vv, weight: w } : vv),
+                      } : s),
+                    }));
+                    fetch(`/api/email-campaigns/${campaign.id}/steps/${step.id}/variants/${variant.id}`, {
+                      method: "PATCH", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ weight: w }),
+                    }).catch(() => {});
+                  }}
+                  style={{ width: 60, height: 28, padding: "0 8px", border: `1px solid ${LINE2}`, borderRadius: 6, fontSize: 13, fontFamily: FONT_MONO, textAlign: "center", outline: "none" }}
+                  title="Peso relativo en la rotación. Una variante con peso 2 sale el doble que otra con peso 1."
+                />
+              </div>
+            </div>
+          )}
+
           {/* Subject + Body con tracking de campo activo */}
           <SubjectBodyEditor
             variant={variant}

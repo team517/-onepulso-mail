@@ -437,19 +437,50 @@ export function extractVariables(text: string): string[] {
 
 /* ── Selección de variante / cuenta (lógica de envío) ─────────────────── */
 
-/** Elige una variante de un step. Determinista por leadId para que A/B testing sea estable por lead. */
+/**
+ * Hash determinista uniforme — produce un float [0, 1) a partir de cualquier
+ * string. Mezcla bien incluso con inputs cortos (djb2 + xorshift round).
+ */
+function deterministicUnit(s: string): number {
+  // djb2
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  // xorshift mixing para distribuir mejor los bits altos
+  let x = h | 0;
+  x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+  // Aseguramos rango [0, 1)
+  return ((x >>> 0) % 1_000_003) / 1_000_003;
+}
+
+/**
+ * Elige una variante de un step. Determinista por (step.id + leadId) — así el
+ * MISMO lead puede recibir A en step1 y B en step2 (descorrelacionados entre
+ * steps). Pero llamadas repetidas con los mismos args devuelven SIEMPRE la
+ * misma variante (idempotente).
+ *
+ * Respeta los weights: variante con weight=3 sale 3× más que otra con weight=1.
+ */
 export function pickVariant(step: Step, leadId: string): Variant {
-  const variants = step.variants.length ? step.variants : [newVariant("A")];
-  const totalWeight = variants.reduce((s, v) => s + Math.max(1, v.weight), 0);
-  // Hash determinista por leadId
-  let h = 0; for (let i = 0; i < leadId.length; i++) h = (h * 31 + leadId.charCodeAt(i)) | 0;
-  const r = (Math.abs(h) % 10000) / 10000 * totalWeight;
+  if (step.variants.length === 0) return newVariant("A");
+  // Filtra variantes vacías (sin subject NI body) — no las queremos rotar porque
+  // el envío fallaría.
+  const eligible = step.variants.filter((v) => (v.subject || "").trim() || (v.body || "").trim());
+  // Si TODAS están vacías, devuelve consistentemente la primera (no rotamos
+  // entre vacías para que el log de errores sea predecible).
+  if (eligible.length === 0) return step.variants[0];
+
+  const totalWeight = eligible.reduce((s, v) => s + Math.max(1, v.weight), 0);
+  // step.id en el seed → step1 y step2 son independientes para el mismo lead
+  const seed = `${step.id}:${leadId}`;
+  const r = deterministicUnit(seed) * totalWeight;
   let acc = 0;
-  for (const v of variants) {
+  for (const v of eligible) {
     acc += Math.max(1, v.weight);
     if (r < acc) return v;
   }
-  return variants[variants.length - 1];
+  return eligible[eligible.length - 1];
 }
 
 /**
