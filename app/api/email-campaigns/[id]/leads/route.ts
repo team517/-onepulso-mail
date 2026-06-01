@@ -133,8 +133,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
+
+  // Soporta 3 modos:
+  //   { all: true }           → borra TODOS los leads de la campaña
+  //   { status: "bounced" }   → borra todos los que tengan ese status
+  //   { ids: [...] }          → borra solo esos IDs (modo anterior)
+  if (body?.all === true) {
+    const all = await listLeads(id);
+    const ids = all.map((l) => l.id);
+    if (ids.length === 0) return NextResponse.json({ ok: true, removed: 0 });
+    const removed = await deleteLeads(id, ids);
+    return NextResponse.json({ ok: true, removed, mode: "all" });
+  }
+
+  if (typeof body?.status === "string") {
+    const all = await listLeads(id);
+    const ids = all.filter((l) => l.status === body.status).map((l) => l.id);
+    if (ids.length === 0) return NextResponse.json({ ok: true, removed: 0 });
+    const removed = await deleteLeads(id, ids);
+    return NextResponse.json({ ok: true, removed, mode: `status=${body.status}` });
+  }
+
   const ids: string[] = Array.isArray(body?.ids) ? body.ids : [];
-  if (ids.length === 0) return NextResponse.json({ error: "Falta lista 'ids'" }, { status: 400 });
+  if (ids.length === 0) return NextResponse.json({ error: "Falta lista 'ids', { all: true } o { status: ... }" }, { status: 400 });
   const removed = await deleteLeads(id, ids);
   return NextResponse.json({ ok: true, removed });
 }

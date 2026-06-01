@@ -1487,7 +1487,6 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
   async function removeSelected() {
     if (selected.size === 0) return;
     if (!confirm(`¿Eliminar ${selected.size} lead(s)?`)) return;
-    // Optimista: quita los leads del estado local de inmediato
     const toRemove = Array.from(selected);
     setLeads((arr) => arr.filter((l) => !selected.has(l.id)));
     setTotal((t) => Math.max(0, t - toRemove.length));
@@ -1503,7 +1502,61 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
       });
       toast("✓ Leads eliminados");
     } catch {
-      // Si falla, recargamos para sincronizar
+      load();
+    }
+  }
+
+  /** Borra TODOS los leads de la campaña — con confirmación reforzada (escribir nombre). */
+  async function removeAllLeads() {
+    if (total === 0) { toast("No hay leads que eliminar"); return; }
+    const confirmName = prompt(
+      `⚠ ELIMINAR TODOS LOS LEADS de la campaña "${campaign.name}".\n\n` +
+      `Esto eliminará ${total} lead${total === 1 ? "" : "s"} de forma permanente. ` +
+      `Los envíos en curso se cancelarán para esos leads.\n\n` +
+      `Para confirmar, escribe el nombre de la campaña tal cual:`
+    );
+    if (confirmName !== campaign.name) {
+      if (confirmName !== null) toast("Nombre incorrecto · cancelado");
+      return;
+    }
+    setLeads([]);
+    setTotal(0);
+    setSelected(new Set());
+    setCampaign((prev) => ({
+      ...prev,
+      metrics: prev.metrics ? { ...prev.metrics, total_leads: 0, active_leads: 0 } : prev.metrics,
+    }));
+    try {
+      const r = await fetch(`/api/email-campaigns/${campaign.id}/leads`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      });
+      const j = await r.json();
+      toast(`✓ ${j.removed} lead${j.removed === 1 ? "" : "s"} eliminados`);
+    } catch {
+      load();
+    }
+  }
+
+  /** Borra todos los leads con un status concreto (bounced, replied, etc). */
+  async function removeByStatus(status: Lead["status"]) {
+    const matching = leads.filter((l) => l.status === status).length;
+    if (matching === 0) { toast(`No hay leads con status "${status}"`); return; }
+    if (!confirm(`¿Eliminar ${matching} lead${matching === 1 ? "" : "s"} con status "${status}"?`)) return;
+    setLeads((arr) => arr.filter((l) => l.status !== status));
+    setTotal((t) => Math.max(0, t - matching));
+    setCampaign((prev) => ({
+      ...prev,
+      metrics: prev.metrics ? { ...prev.metrics, total_leads: Math.max(0, (prev.metrics.total_leads || 0) - matching) } : prev.metrics,
+    }));
+    try {
+      const r = await fetch(`/api/email-campaigns/${campaign.id}/leads`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const j = await r.json();
+      toast(`✓ ${j.removed} lead${j.removed === 1 ? "" : "s"} con status "${status}" eliminados`);
+    } catch {
       load();
     }
   }
@@ -1522,11 +1575,19 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
             </button>
           ))}
         </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 10, position: "relative" }}>
           {selected.size > 0 && (
             <button onClick={removeSelected} style={{ ...ghostBtn, color: "#c12530", borderColor: "rgba(255,51,68,0.25)" }}>
               🗑 Eliminar {selected.size}
             </button>
+          )}
+          {total > 0 && (
+            <LeadsDeleteMenu
+              total={total}
+              statusCounts={leads.reduce((acc, l) => ({ ...acc, [l.status]: (acc[l.status] || 0) + 1 }), {} as Record<string, number>)}
+              onDeleteAll={removeAllLeads}
+              onDeleteByStatus={removeByStatus}
+            />
           )}
           <button onClick={() => setShowUpload(true)} style={brandBtn}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -2051,6 +2112,101 @@ function HeaderChip({ raw, key_, isEmail }: { raw: string; key_: string; isEmail
         {isEmail ? "email" : `{{${key_}}}`}
       </span>
     </div>
+  );
+}
+
+/** Dropdown con opciones de borrado masivo de leads. */
+function LeadsDeleteMenu({ total, statusCounts, onDeleteAll, onDeleteByStatus }: {
+  total: number;
+  statusCounts: Record<string, number>;
+  onDeleteAll: () => Promise<void>;
+  onDeleteByStatus: (status: Lead["status"]) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasBounced = (statusCounts.bounced || 0) > 0;
+  const hasReplied = (statusCounts.replied || 0) > 0;
+  const hasUnsub = (statusCounts.unsubscribed || 0) > 0;
+  const hasCompleted = (statusCounts.completed || 0) > 0;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(!open)} style={{
+        ...ghostBtn, color: "#c12530", borderColor: "rgba(255,51,68,0.25)",
+      }} title="Opciones de eliminación masiva">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+        Eliminar
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ marginLeft: 2 }}><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 30 }} />
+          <div style={{
+            position: "absolute", top: 44, right: 0, zIndex: 40,
+            background: "#fff", border: `1px solid ${LINE}`, borderRadius: 12,
+            boxShadow: "0 18px 48px rgba(10,13,20,0.18)",
+            minWidth: 260, padding: 6,
+          }}>
+            <div style={{ padding: "8px 12px 4px", fontSize: 10.5, color: INK_4, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Borrar por estado
+            </div>
+            {hasBounced && (
+              <DelMenuItem label="Bounces" count={statusCounts.bounced} onClick={() => { setOpen(false); onDeleteByStatus("bounced"); }} />
+            )}
+            {hasReplied && (
+              <DelMenuItem label="Respondidos" count={statusCounts.replied} onClick={() => { setOpen(false); onDeleteByStatus("replied"); }} />
+            )}
+            {hasUnsub && (
+              <DelMenuItem label="Unsubscribed" count={statusCounts.unsubscribed} onClick={() => { setOpen(false); onDeleteByStatus("unsubscribed"); }} />
+            )}
+            {hasCompleted && (
+              <DelMenuItem label="Completados" count={statusCounts.completed} onClick={() => { setOpen(false); onDeleteByStatus("completed"); }} />
+            )}
+            {!hasBounced && !hasReplied && !hasUnsub && !hasCompleted && (
+              <div style={{ padding: "6px 12px", fontSize: 11.5, color: INK_5, fontStyle: "italic" }}>
+                (sin leads en estados finales)
+              </div>
+            )}
+            <hr style={{ border: 0, borderTop: `1px solid ${LINE}`, margin: "6px 0" }} />
+            <button
+              onClick={() => { setOpen(false); onDeleteAll(); }}
+              style={{
+                width: "100%", textAlign: "left", padding: "10px 12px",
+                border: 0, background: "rgba(255,51,68,0.06)",
+                fontFamily: FONT_UI, fontSize: 13, fontWeight: 700,
+                color: "#c12530", cursor: "pointer", borderRadius: 8,
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,51,68,0.12)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,51,68,0.06)"; }}
+            >
+              🗑 Eliminar TODOS ({total})
+              <div style={{ fontSize: 10.5, color: INK_4, fontWeight: 500, marginTop: 2 }}>
+                Pedirá confirmación escribiendo el nombre de la campaña
+              </div>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DelMenuItem({ label, count, onClick }: { label: string; count: number; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: "100%", textAlign: "left", padding: "7px 12px",
+        border: 0, background: "transparent",
+        fontFamily: FONT_UI, fontSize: 13, fontWeight: 500,
+        color: INK_2, cursor: "pointer", borderRadius: 6,
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = SURF; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+    >
+      <span>{label}</span>
+      <span style={{ color: INK_4, fontFamily: FONT_MONO, fontSize: 11, fontWeight: 700 }}>{count}</span>
+    </button>
   );
 }
 
