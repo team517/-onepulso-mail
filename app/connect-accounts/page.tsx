@@ -224,6 +224,7 @@ export default function ConnectAccountsPage() {
   const [showBulkCsv, setShowBulkCsv] = useState(false);
   const [showBulkIonos, setShowBulkIonos] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showSlowRamp, setShowSlowRamp] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
 
   function showToast(t: string) { setToast(t); setTimeout(() => setToast(null), 3200); }
@@ -498,48 +499,91 @@ export default function ConnectAccountsPage() {
           </button>
         </div>
 
-        {/* Selection bar */}
-        {selected.size > 0 && (
+        {/* Selection bar — siempre visible, con master checkbox */}
+        {accounts.length > 0 && (
           <div style={{
             marginTop: 12,
             display: "flex", alignItems: "center", gap: 12,
-            background: "rgba(154,105,245,0.07)",
-            border: "1px solid rgba(154,105,245,0.22)",
+            background: selected.size > 0 ? "rgba(154,105,245,0.07)" : PAPER,
+            border: selected.size > 0 ? "1px solid rgba(154,105,245,0.22)" : `1px solid ${LINE}`,
             borderRadius: 14, padding: "10px 16px",
+            flexWrap: "wrap",
           }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: PURPLE_DEEP }}>
-              {selected.size} cuenta{selected.size === 1 ? "" : "s"} seleccionada{selected.size === 1 ? "" : "s"}
-            </div>
-            <button onClick={() => verifyIds(Array.from(selected))} style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}>
-              ↻ Verificar
-            </button>
-            <button
-              onClick={async () => {
-                const tag = prompt("Tag a asignar:");
-                if (tag && tag.trim()) {
-                  for (const id of selected) await addTagToAccount(id, tag.trim());
-                  showToast("✓ Tag asignado");
+            {/* Master checkbox: vacío → llenar al click; medio o lleno → vaciar */}
+            <label
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: INK_2, fontWeight: 600 }}
+              onClick={(e) => {
+                e.preventDefault();
+                if (selected.size === filtered.length && filtered.length > 0) {
+                  setSelected(new Set());
+                } else {
+                  setSelected(new Set(filtered.map((a) => a.id)));
                 }
               }}
-              style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}
             >
-              + Tag
-            </button>
-            <button
-              onClick={async () => {
-                if (!confirm(`¿Eliminar ${selected.size} cuenta(s)?`)) return;
-                for (const id of selected) await fetch(`/api/email-accounts/${id}`, { method: "DELETE" });
-                setSelected(new Set());
-                await loadAccounts();
-                showToast("✓ Cuentas eliminadas");
-              }}
-              style={{ ...ghostBtn, height: 32, fontSize: 12.5, color: "#c12530", borderColor: "rgba(255,51,68,0.3)" }}
-            >
-              🗑 Eliminar
-            </button>
-            <button onClick={() => setSelected(new Set())} style={{ marginLeft: "auto", background: "transparent", border: 0, color: INK_3, fontSize: 12.5, cursor: "pointer" }}>
-              Limpiar selección
-            </button>
+              <span style={{
+                width: 20, height: 20, borderRadius: 5,
+                border: `1.5px solid ${selected.size > 0 ? PURPLE : LINE2}`,
+                background: selected.size === filtered.length && filtered.length > 0 ? PURPLE : "#fff",
+                display: "grid", placeItems: "center",
+                color: "#fff",
+              }}>
+                {selected.size === filtered.length && filtered.length > 0 && (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                )}
+                {selected.size > 0 && selected.size < filtered.length && (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={PURPLE} strokeWidth="3"><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                )}
+              </span>
+              {selected.size === 0
+                ? `Seleccionar todas (${filtered.length})`
+                : selected.size === filtered.length
+                  ? `${selected.size} seleccionadas`
+                  : `${selected.size} de ${filtered.length}`}
+            </label>
+
+            {selected.size > 0 && (
+              <>
+                <span style={{ width: 1, height: 22, background: LINE }} />
+                <button onClick={() => verifyIds(Array.from(selected))} style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}>
+                  ↻ Verificar
+                </button>
+                <button
+                  onClick={async () => {
+                    const tag = prompt("Tag a asignar:");
+                    if (tag && tag.trim()) {
+                      for (const id of selected) await addTagToAccount(id, tag.trim());
+                      showToast("✓ Tag asignado");
+                    }
+                  }}
+                  style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}
+                >
+                  + Tag
+                </button>
+                <button
+                  onClick={() => setShowSlowRamp(true)}
+                  style={{ ...ghostBtn, height: 32, fontSize: 12.5, background: "rgba(31,138,91,0.08)", color: GREEN, borderColor: "rgba(31,138,91,0.25)" }}
+                  title="Activa el slow ramp en las cuentas seleccionadas"
+                >
+                  📈 Activar slow ramp
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!confirm(`¿Eliminar ${selected.size} cuenta(s)?`)) return;
+                    for (const id of selected) await fetch(`/api/email-accounts/${id}`, { method: "DELETE" });
+                    setSelected(new Set());
+                    await loadAccounts();
+                    showToast("✓ Cuentas eliminadas");
+                  }}
+                  style={{ ...ghostBtn, height: 32, fontSize: 12.5, color: "#c12530", borderColor: "rgba(255,51,68,0.3)" }}
+                >
+                  🗑 Eliminar
+                </button>
+                <button onClick={() => setSelected(new Set())} style={{ marginLeft: "auto", background: "transparent", border: 0, color: INK_3, fontSize: 12.5, cursor: "pointer" }}>
+                  Limpiar selección
+                </button>
+              </>
+            )}
           </div>
         )}
       </section>
@@ -648,6 +692,28 @@ export default function ConnectAccountsPage() {
         />
       )}
 
+      {showSlowRamp && (
+        <SlowRampModal
+          accountCount={selected.size}
+          onClose={() => setShowSlowRamp(false)}
+          onApply={async (config) => {
+            const r = await fetch("/api/email-accounts/slow-ramp", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ids: Array.from(selected), ...config }),
+            });
+            const j = await r.json();
+            if (j.ok) {
+              showToast(`✓ Slow ramp ${config.enabled ? "activado" : "desactivado"} en ${j.affected} cuentas`);
+              setShowSlowRamp(false);
+              setSelected(new Set());
+              await loadAccounts();
+            } else {
+              showToast(j.error || "Error");
+            }
+          }}
+        />
+      )}
+
       {toast && (
         <div style={{
           position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
@@ -733,7 +799,19 @@ function AccountCard({
   const fullyOk = a.smtp_ok && a.imap_ok;
   const partial = a.smtp_ok !== a.imap_ok;
   const sentToday = a.sent_today ?? 0;
-  const dailyLimit = a.daily_limit ?? 50;
+  // Daily limit EFECTIVO con slow ramp aplicado, si está activo
+  const baseLimit = a.daily_limit ?? 50;
+  const ramp = a.slow_ramp_enabled && a.slow_ramp_started_at ? (() => {
+    const start = a.slow_ramp_start_limit ?? 5;
+    const target = a.slow_ramp_target_limit ?? baseLimit;
+    const inc = Math.max(1, a.slow_ramp_increment ?? 2);
+    const incDays = Math.max(1, a.slow_ramp_increment_days ?? 1);
+    const days = Math.floor((Date.now() - new Date(a.slow_ramp_started_at).getTime()) / (24*60*60*1000));
+    const increments = Math.floor(days / incDays);
+    const current = Math.min(target, start + increments * inc);
+    return { current, target, start, daysRunning: days, pct: target === start ? 100 : ((current - start) / (target - start)) * 100 };
+  })() : null;
+  const dailyLimit = ramp ? ramp.current : baseLimit;
   const usagePct = Math.min(100, Math.round((sentToday / Math.max(dailyLimit, 1)) * 100));
 
   // Iniciales para el avatar (estilo landing — chips de contacto)
@@ -836,13 +914,37 @@ function AccountCard({
         alignItems: "center", marginTop: 16, paddingLeft: 90,
       }}>
         <div>
-          <div style={miniLabel}>Enviados hoy</div>
+          <div style={miniLabel}>
+            Enviados hoy
+            {ramp && (
+              <span style={{
+                marginLeft: 6, padding: "1px 6px", borderRadius: 999,
+                background: "rgba(31,138,91,0.10)", color: GREEN,
+                fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em",
+                fontFamily: FONT_UI,
+              }} title={`Slow ramp activo · día ${ramp.daysRunning + 1} · sube hasta ${ramp.target}/día`}>
+                📈 RAMP
+              </span>
+            )}
+          </div>
           <div style={{ fontFamily: FONT_SANS, fontWeight: 700, fontSize: 20, color: INK, marginTop: 2, letterSpacing: "-0.02em" }}>
             {sentToday}<span style={{ color: INK_4, fontWeight: 500, fontSize: 14 }}>/{dailyLimit}</span>
+            {ramp && ramp.current < ramp.target && (
+              <span style={{ display: "block", fontSize: 10.5, color: INK_4, fontFamily: FONT_MONO, fontWeight: 500, marginTop: 1 }}>
+                → {ramp.target} en {Math.max(0, Math.ceil((ramp.target - ramp.current) / Math.max(1, a.slow_ramp_increment ?? 2)) * Math.max(1, a.slow_ramp_increment_days ?? 1))} días
+              </span>
+            )}
           </div>
         </div>
         <div>
-          <div style={{ ...miniLabel, marginBottom: 6 }}>Uso del día</div>
+          <div style={{ ...miniLabel, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+            <span>Uso del día</span>
+            {ramp && (
+              <span style={{ fontSize: 10, color: INK_4, fontFamily: FONT_MONO, fontWeight: 500, marginLeft: "auto" }}>
+                Ramp: {ramp.pct.toFixed(0)}% al target
+              </span>
+            )}
+          </div>
           <div style={{ height: 6, background: "#eef0f4", borderRadius: 999, overflow: "hidden" }}>
             <div style={{
               width: `${usagePct}%`, height: "100%",
@@ -850,6 +952,15 @@ function AccountCard({
               transition: "width .3s",
             }} />
           </div>
+          {ramp && (
+            <div style={{ height: 3, background: "#eef0f4", borderRadius: 999, overflow: "hidden", marginTop: 3 }}>
+              <div style={{
+                width: `${ramp.pct}%`, height: "100%",
+                background: GREEN,
+                transition: "width .3s",
+              }} />
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onEdit} style={iconBtn} title="Editar">
@@ -1394,6 +1505,154 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div style={{ fontSize: 11, fontWeight: 600, color: INK_3, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
       {children}
     </label>
+  );
+}
+
+/** Modal de configuración del slow ramp para N cuentas a la vez. */
+function SlowRampModal({ accountCount, onClose, onApply }: {
+  accountCount: number;
+  onClose: () => void;
+  onApply: (config: { enabled: boolean; start_limit: number; target_limit: number; increment: number; increment_days: number; restart: boolean }) => Promise<void>;
+}) {
+  const [startLimit, setStartLimit] = useState(5);
+  const [targetLimit, setTargetLimit] = useState(30);
+  const [increment, setIncrement] = useState(2);
+  const [incrementDays, setIncrementDays] = useState(1);
+  const [restart, setRestart] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [preset, setPreset] = useState<"conservador" | "estandar" | "agresivo" | "custom">("estandar");
+
+  function applyPreset(p: typeof preset) {
+    setPreset(p);
+    if (p === "conservador") {
+      setStartLimit(3); setTargetLimit(20); setIncrement(1); setIncrementDays(1);
+    } else if (p === "estandar") {
+      setStartLimit(5); setTargetLimit(30); setIncrement(2); setIncrementDays(1);
+    } else if (p === "agresivo") {
+      setStartLimit(10); setTargetLimit(50); setIncrement(5); setIncrementDays(1);
+    }
+  }
+
+  // Calcula schedule preview
+  const schedule: { day: number; limit: number }[] = [];
+  let d = 0, current = startLimit;
+  while (current < targetLimit && d < 30) {
+    schedule.push({ day: d + 1, limit: current });
+    if (d % incrementDays === incrementDays - 1) {
+      current = Math.min(targetLimit, current + increment);
+    }
+    d++;
+  }
+  schedule.push({ day: d + 1, limit: current });
+  const daysToTarget = schedule.findIndex((s) => s.limit >= targetLimit) + 1 || schedule.length;
+
+  return (
+    <ModalShell
+      title={`Activar slow ramp en ${accountCount} cuenta${accountCount === 1 ? "" : "s"}`}
+      subtitle="Las cuentas empiezan enviando poco volumen y suben gradualmente — protege la reputación. Estilo Instantly."
+      onClose={onClose}
+      width={720}
+      footer={
+        <>
+          <button onClick={onClose} style={ghostBtn} disabled={submitting}>Cancelar</button>
+          <button
+            onClick={async () => {
+              setSubmitting(true);
+              await onApply({ enabled: false, start_limit: startLimit, target_limit: targetLimit, increment, increment_days: incrementDays, restart });
+              setSubmitting(false);
+            }}
+            disabled={submitting}
+            style={{ ...ghostBtn, color: "#c12530", borderColor: "rgba(255,51,68,0.25)" }}
+          >
+            Desactivar
+          </button>
+          <button
+            onClick={async () => {
+              setSubmitting(true);
+              await onApply({ enabled: true, start_limit: startLimit, target_limit: targetLimit, increment, increment_days: incrementDays, restart });
+              setSubmitting(false);
+            }}
+            disabled={submitting || targetLimit < startLimit}
+            style={{ ...brandBtn, opacity: submitting || targetLimit < startLimit ? 0.55 : 1 }}
+          >
+            {submitting ? "Aplicando…" : `Activar en ${accountCount}`}
+          </button>
+        </>
+      }
+    >
+      {/* Presets */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: INK_3, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Preset</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {([
+            { id: "conservador" as const, label: "Conservador", sub: "3→20, +1/día (dominios nuevos)" },
+            { id: "estandar" as const, label: "Estándar", sub: "5→30, +2/día (recomendado)" },
+            { id: "agresivo" as const, label: "Agresivo", sub: "10→50, +5/día (dominio probado)" },
+          ]).map((p) => (
+            <button key={p.id} onClick={() => applyPreset(p.id)} style={{
+              flex: 1, minWidth: 150, padding: "10px 12px", borderRadius: 10,
+              border: preset === p.id ? `1.5px solid ${PURPLE}` : `1px solid ${LINE2}`,
+              background: preset === p.id ? "rgba(154,105,245,0.08)" : "#fff",
+              color: preset === p.id ? PURPLE_DEEP : INK_2,
+              fontFamily: FONT_UI, cursor: "pointer", textAlign: "left",
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 13 }}>{p.label}</div>
+              <div style={{ fontSize: 11, color: INK_4, marginTop: 2 }}>{p.sub}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Inputs */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+        <Field label="Empezar en">
+          <input type="number" min={1} max={100} value={startLimit} onChange={(e) => { setStartLimit(Math.max(1, Math.min(100, parseInt(e.target.value) || 1))); setPreset("custom"); }} style={inputStyle} />
+        </Field>
+        <Field label="Target">
+          <input type="number" min={1} max={500} value={targetLimit} onChange={(e) => { setTargetLimit(Math.max(1, Math.min(500, parseInt(e.target.value) || 30))); setPreset("custom"); }} style={inputStyle} />
+        </Field>
+        <Field label="Incremento">
+          <input type="number" min={1} max={50} value={increment} onChange={(e) => { setIncrement(Math.max(1, Math.min(50, parseInt(e.target.value) || 2))); setPreset("custom"); }} style={inputStyle} />
+        </Field>
+        <Field label="Cada N días">
+          <input type="number" min={1} max={14} value={incrementDays} onChange={(e) => { setIncrementDays(Math.max(1, Math.min(14, parseInt(e.target.value) || 1))); setPreset("custom"); }} style={inputStyle} />
+        </Field>
+      </div>
+
+      {/* Schedule preview */}
+      <div style={{ background: SURF, border: `1px solid ${LINE}`, borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+          <strong style={{ fontSize: 12, color: INK, fontFamily: FONT_SANS }}>Calendario previsto</strong>
+          <span style={{ fontSize: 11, color: INK_4, fontFamily: FONT_MONO }}>
+            Llega a {targetLimit}/día en <strong style={{ color: GREEN }}>{daysToTarget} días</strong>
+          </span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: 4, fontFamily: FONT_MONO, fontSize: 11 }}>
+          {schedule.slice(0, 20).map((s, i) => (
+            <div key={i} style={{
+              padding: "5px 8px", background: "#fff", border: `1px solid ${LINE}`, borderRadius: 6,
+              textAlign: "center",
+              color: s.limit >= targetLimit ? GREEN : INK_2,
+              fontWeight: s.limit >= targetLimit ? 700 : 500,
+            }}>
+              Día {s.day}<br />
+              <span style={{ fontSize: 12 }}>{s.limit}/día</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", background: SURF, border: `1px solid ${LINE}`, borderRadius: 8, cursor: "pointer", marginBottom: 4 }}>
+        <input type="checkbox" checked={restart} onChange={(e) => setRestart(e.target.checked)} style={{ marginTop: 3 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: INK_2 }}>Reiniciar la rampa</div>
+          <div style={{ fontSize: 11.5, color: INK_4, marginTop: 2 }}>
+            Si la cuenta ya tenía slow ramp activado, esto borra el progreso anterior y arranca de cero.
+            Si no, se ignora.
+          </div>
+        </div>
+      </label>
+    </ModalShell>
   );
 }
 

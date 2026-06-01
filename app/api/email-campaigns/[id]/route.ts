@@ -8,6 +8,7 @@ import {
   deleteCampaign, getCampaign, listLeads, saveCampaign,
   type Campaign, type CampaignOptions, type CampaignSchedule,
 } from "@/lib/email-campaigns";
+import { listEmailAccounts, upsertEmailAccount } from "@/lib/email-accounts";
 
 export const runtime = "nodejs";
 
@@ -40,6 +41,26 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     c.steps = body.steps; // reemplaza la secuencia entera (drag/drop, etc.)
   }
   await saveCampaign(c);
+
+  // Si se está ACTIVANDO la campaña, arranca el slow ramp de las cuentas
+  // asignadas que lo tengan habilitado pero aún sin started_at.
+  if (body.status === "active") {
+    const idSet = new Set(c.account_ids || []);
+    const tagSet = new Set(c.account_tags || []);
+    const allAccounts = await listEmailAccounts();
+    const assigned = allAccounts.filter((a) => {
+      if (idSet.has(a.id)) return true;
+      if (tagSet.size > 0 && (a.tags || []).some((t) => tagSet.has(t))) return true;
+      return false;
+    });
+    const nowIso = new Date().toISOString();
+    for (const acc of assigned) {
+      if (acc.slow_ramp_enabled && !acc.slow_ramp_started_at) {
+        await upsertEmailAccount({ ...acc, slow_ramp_started_at: nowIso });
+      }
+    }
+  }
+
   return NextResponse.json({ ok: true, campaign: c });
 }
 

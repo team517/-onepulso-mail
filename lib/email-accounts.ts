@@ -46,9 +46,101 @@ export type EmailAccount = {
   warmup_increment?: number;
   sent_today?: number;
 
-  // Tags para filtrar (ej: "fintech", "es", "warmup-on")
+  // ── SLOW RAMP (estilo Instantly) ──────────────────────────────────────
+  // Si está activo, la cuenta empieza enviando `slow_ramp_start_limit` por día
+  // y sube `slow_ramp_increment` cada `slow_ramp_increment_days` días hasta
+  // alcanzar `slow_ramp_target_limit`. Protege la reputación de cuentas nuevas.
+  slow_ramp_enabled?: boolean;
+  slow_ramp_start_limit?: number;       // default 5
+  slow_ramp_target_limit?: number;      // default 30
+  slow_ramp_increment?: number;         // default 2 emails añadidos
+  slow_ramp_increment_days?: number;    // default 1 día entre incrementos
+  slow_ramp_started_at?: string;        // ISO — cuándo se activó
+
+  // Tags para filtrar
   tags?: string[];
 };
+
+/** Defaults seguros — basados en recomendaciones de Instantly. */
+export const SLOW_RAMP_DEFAULTS = {
+  start_limit: 5,
+  target_limit: 30,
+  increment: 2,
+  increment_days: 1,
+};
+
+/**
+ * Calcula el daily limit EFECTIVO de una cuenta en este momento.
+ * Si slow ramp NO está activo: devuelve `account.daily_limit` (o 30 por defecto).
+ * Si SÍ está activo: empieza en start_limit, sube increment cada increment_days días
+ * desde slow_ramp_started_at, capped en target_limit.
+ */
+export function getEffectiveDailyLimit(account: EmailAccount): number {
+  const defaultLimit = account.daily_limit ?? 30;
+  if (!account.slow_ramp_enabled || !account.slow_ramp_started_at) {
+    return defaultLimit;
+  }
+  const start = account.slow_ramp_start_limit ?? SLOW_RAMP_DEFAULTS.start_limit;
+  const target = account.slow_ramp_target_limit ?? defaultLimit;
+  const inc = Math.max(1, account.slow_ramp_increment ?? SLOW_RAMP_DEFAULTS.increment);
+  const incDays = Math.max(1, account.slow_ramp_increment_days ?? SLOW_RAMP_DEFAULTS.increment_days);
+  const ms = Date.now() - new Date(account.slow_ramp_started_at).getTime();
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+  const increments = Math.floor(days / incDays);
+  const current = start + increments * inc;
+  return Math.min(Math.max(start, current), target);
+}
+
+/** Estado de rampa: progreso, siguiente incremento, días hasta target. */
+export function getSlowRampStatus(account: EmailAccount): {
+  enabled: boolean;
+  current_limit: number;
+  target_limit: number;
+  start_limit: number;
+  increment: number;
+  increment_days: number;
+  days_running: number;
+  days_to_target: number;
+  next_increment_at: string | null;
+  progress_pct: number;
+} {
+  const defaultLimit = account.daily_limit ?? 30;
+  const enabled = !!account.slow_ramp_enabled;
+  const start = account.slow_ramp_start_limit ?? SLOW_RAMP_DEFAULTS.start_limit;
+  const target = account.slow_ramp_target_limit ?? defaultLimit;
+  const inc = Math.max(1, account.slow_ramp_increment ?? SLOW_RAMP_DEFAULTS.increment);
+  const incDays = Math.max(1, account.slow_ramp_increment_days ?? SLOW_RAMP_DEFAULTS.increment_days);
+
+  if (!enabled || !account.slow_ramp_started_at) {
+    return {
+      enabled, current_limit: defaultLimit, target_limit: target, start_limit: start,
+      increment: inc, increment_days: incDays,
+      days_running: 0, days_to_target: 0,
+      next_increment_at: null,
+      progress_pct: enabled ? 0 : 100,
+    };
+  }
+
+  const startedAt = new Date(account.slow_ramp_started_at).getTime();
+  const ms = Date.now() - startedAt;
+  const daysRunning = Math.floor(ms / (24 * 60 * 60 * 1000));
+  const current = getEffectiveDailyLimit(account);
+  const incrementsToTarget = Math.ceil(Math.max(0, target - current) / inc);
+  const daysToTarget = incrementsToTarget * incDays;
+  const nextIncrementDay = Math.ceil((daysRunning + 1) / incDays) * incDays;
+  const nextIncrementAt = current >= target
+    ? null
+    : new Date(startedAt + nextIncrementDay * 24 * 60 * 60 * 1000).toISOString();
+  const progress = target === start ? 100 : ((current - start) / (target - start)) * 100;
+
+  return {
+    enabled, current_limit: current, target_limit: target, start_limit: start,
+    increment: inc, increment_days: incDays,
+    days_running: daysRunning, days_to_target: daysToTarget,
+    next_increment_at: nextIncrementAt,
+    progress_pct: Math.max(0, Math.min(100, progress)),
+  };
+}
 
 /** Lo que el usuario manda (mínimo: email + password) */
 export type EmailAccountInput = {

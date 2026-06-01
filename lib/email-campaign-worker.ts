@@ -25,7 +25,7 @@ import {
   getCampaign, listCampaigns, listLeads, writeLeads,
   pickAccount, pickVariant, renderTemplate, saveCampaign,
 } from "./email-campaigns";
-import { EmailAccount, listEmailAccounts, upsertEmailAccount, getEmailAccount } from "./email-accounts";
+import { EmailAccount, getEffectiveDailyLimit, listEmailAccounts, upsertEmailAccount, getEmailAccount } from "./email-accounts";
 import { syncAllInboxes } from "./email-inbox-sync";
 import { detectRepliesForAccounts } from "./email-reply-detector";
 import { listFollowUps, updateFollowUp } from "./email-followups";
@@ -250,13 +250,24 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   // Min/random gap configurables (default 6-9 min)
   const minGap = campaign.options.min_gap_minutes ?? 6;
   const randomGap = campaign.options.random_gap_minutes ?? 3;
-  const dailyLimit = campaign.options.daily_limit_per_account ?? 30;
+  const campaignDailyLimit = campaign.options.daily_limit_per_account ?? 30;
   const rotation = campaign.options.account_rotation;
+
+  /**
+   * Daily limit efectivo de la cuenta — toma el MENOR entre:
+   *   · slow ramp actual de la cuenta (si está activo)
+   *   · campaign.options.daily_limit_per_account (cap global de la campaña)
+   * Así una cuenta con slow ramp en día 1 envía 5 aunque la campaña permita 30,
+   * y una cuenta sin ramp envía 30 (o lo que diga la campaña, lo que sea menor).
+   */
+  function getDailyLimitFor(account: EmailAccount): number {
+    return Math.min(getEffectiveDailyLimit(account), campaignDailyLimit);
+  }
 
   /** ¿Está la cuenta lista para mandar AHORA? (no rate-limited + no full daily) */
   function accountReady(account: EmailAccount): boolean {
     const s = getAccountState(account.id);
-    if (s.sent_today >= dailyLimit) return false;
+    if (s.sent_today >= getDailyLimitFor(account)) return false;
     if (s.next_eligible_at && new Date(s.next_eligible_at) > now) return false;
     return true;
   }
