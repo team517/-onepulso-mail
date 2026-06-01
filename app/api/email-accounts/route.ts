@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteEmailAccount, listEmailAccounts, safe } from "@/lib/email-accounts";
+import { getAllAccountAssignments } from "@/lib/email-account-campaigns";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   const all = await listEmailAccounts();
-  return NextResponse.json({ accounts: all.map(safe) });
+  const assignments = await getAllAccountAssignments(all);
+  return NextResponse.json({
+    accounts: all.map((a) => ({
+      ...safe(a),
+      assigned_campaigns: assignments.get(a.id) || [],
+    })),
+  });
 }
 
 export async function DELETE(req: NextRequest) {

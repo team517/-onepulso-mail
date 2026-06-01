@@ -58,6 +58,7 @@ type Account = {
   smtp_ok: boolean; imap_ok: boolean;
   daily_limit?: number; warmup_enabled?: boolean; sent_today?: number;
   tags?: string[];
+  assigned_campaigns?: { campaign_id: string; campaign_name: string; status: string; via: "id" | "tag"; tag?: string }[];
 };
 
 type Tab = "overview" | "sequences" | "leads" | "schedule" | "options" | "accounts";
@@ -2795,7 +2796,26 @@ function AccountsTab({ campaign, setCampaign, toast }: { campaign: Campaign; set
                 fontFamily: FONT_SANS, fontWeight: 700, fontSize: 12.5,
               }}>{a.email.slice(0, 2).toUpperCase()}</div>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600, color: INK, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.email}</div>
+                <div style={{ fontWeight: 600, color: INK, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 8 }}>
+                  {a.email}
+                  {(() => {
+                    // Otras campañas DISTINTAS de la actual donde esta cuenta también está
+                    const others = (a.assigned_campaigns || []).filter((c) => c.campaign_id !== campaign.id);
+                    if (others.length === 0) return null;
+                    const activeOthers = others.filter((c) => c.status === "active").length;
+                    return (
+                      <span style={{
+                        padding: "1px 7px", borderRadius: 999,
+                        background: activeOthers > 0 ? "rgba(249,166,3,0.14)" : SURF_2,
+                        color: activeOthers > 0 ? "#b97500" : INK_3,
+                        fontSize: 10.5, fontWeight: 700,
+                        fontFamily: FONT_UI,
+                      }} title={others.map((c) => `${c.campaign_name} · ${c.status}`).join("\n")}>
+                        {activeOthers > 0 ? "⚠ " : ""}también en {others.length} {others.length === 1 ? "campaña" : "campañas"}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <div style={{ fontSize: 12, color: INK_4, fontFamily: FONT_MONO, marginTop: 2 }}>
                   {a.provider} · {a.smtp_host} · daily {a.daily_limit ?? 50}
                   {a.tags && a.tags.length > 0 && <span style={{ color: PURPLE_DEEP, marginLeft: 6 }}>· {a.tags.join(", ")}</span>}

@@ -53,6 +53,15 @@ type Account = {
   warmup_increment?: number;
   sent_today?: number;
   tags?: string[];
+  // Slow ramp
+  slow_ramp_enabled?: boolean;
+  slow_ramp_start_limit?: number;
+  slow_ramp_target_limit?: number;
+  slow_ramp_increment?: number;
+  slow_ramp_increment_days?: number;
+  slow_ramp_started_at?: string;
+  // Campañas asignadas (calculado server-side)
+  assigned_campaigns?: { campaign_id: string; campaign_name: string; status: "draft" | "active" | "paused" | "completed"; via: "id" | "tag"; tag?: string }[];
 };
 
 type VerifyResult = {
@@ -907,6 +916,50 @@ function AccountCard({
           </button>
         )}
       </div>
+
+      {/* Campañas asignadas — chips clicables */}
+      {(a.assigned_campaigns || []).length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, paddingLeft: 90, alignItems: "center" }}>
+          <span style={{ fontSize: 10.5, color: INK_4, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 4 }}>
+            En {a.assigned_campaigns!.length} campaña{a.assigned_campaigns!.length === 1 ? "" : "s"}:
+          </span>
+          {(a.assigned_campaigns || []).map((c) => {
+            const statusColors: Record<string, { bg: string; fg: string; dot: string }> = {
+              draft:     { bg: SURF_2, fg: INK_3, dot: INK_4 },
+              active:    { bg: "rgba(31,138,91,0.10)", fg: GREEN, dot: GREEN },
+              paused:    { bg: "rgba(249,166,3,0.12)", fg: "#b97500", dot: ORANGE },
+              completed: { bg: "rgba(154,105,245,0.10)", fg: PURPLE_DEEP, dot: PURPLE },
+            };
+            const sc = statusColors[c.status] || statusColors.draft;
+            return (
+              <a
+                key={c.campaign_id}
+                href={`/email-campaigns/${c.campaign_id}`}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "3px 9px", borderRadius: 999,
+                  background: sc.bg, color: sc.fg,
+                  fontSize: 11, fontWeight: 600,
+                  fontFamily: FONT_UI, textDecoration: "none",
+                  border: `1px solid ${LINE}`,
+                  transition: "transform .06s",
+                }}
+                title={`${c.campaign_name} · ${c.status} · asignada vía ${c.via === "tag" ? `tag "${c.tag}"` : "ID directo"}`}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(-1px)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.transform = "none"; }}
+              >
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: sc.dot }} />
+                {c.campaign_name.length > 28 ? c.campaign_name.slice(0, 26) + "…" : c.campaign_name}
+                {c.via === "tag" && (
+                  <span style={{ fontSize: 9.5, color: INK_4, fontFamily: FONT_MONO, fontWeight: 500 }} title={`vía tag "${c.tag}"`}>
+                    #{c.tag}
+                  </span>
+                )}
+              </a>
+            );
+          })}
+        </div>
+      )}
 
       {/* Stats row */}
       <div style={{
