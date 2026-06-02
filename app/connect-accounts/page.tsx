@@ -336,25 +336,50 @@ export default function ConnectAccountsPage() {
     router.push("/landing");
   }
 
+  /**
+   * Procesa el CSV en chunks de 5 cuentas a la vez para:
+   *   1. Evitar timeouts en lotes grandes (Railway proxy / serverless)
+   *   2. Mostrar progreso real al usuario ("3/20 verificadas…")
+   *   3. Que las cuentas verificadas aparezcan inmediatamente en el listado
+   *      en lugar de esperar a que terminen TODAS.
+   */
   async function submitCsvRows(rows: CsvRow[]) {
     const valid = rows.filter((r) => !r.__error);
-    if (valid.length === 0) { showToast("No hay filas válidas en el CSV"); return; }
-    showToast(`Verificando ${valid.length} cuentas…`);
-    const r = await fetch("/api/email-accounts/bulk-connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accounts: valid.map(rowToInput) }),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      const s = j.summary;
-      showToast(`✓ ${s.fully_ok}/${s.total} verificadas · ${s.saved} guardadas`);
-      await loadAccounts();
-      setShowBulkCsv(false);
-    } else {
-      showToast(j.error || "Error en bulk");
+    if (valid.length === 0) { showToast("No hay filas válidas en el CSV"); return []; }
+
+    const CHUNK = 5;
+    const inputs = valid.map(rowToInput);
+    const allResults: VerifyResult[] = [];
+    let okCount = 0, failCount = 0;
+
+    for (let i = 0; i < inputs.length; i += CHUNK) {
+      const slice = inputs.slice(i, i + CHUNK);
+      const done = Math.min(i + slice.length, inputs.length);
+      showToast(`Verificando ${done}/${inputs.length} cuentas…`);
+      try {
+        const r = await fetch("/api/email-accounts/bulk-connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accounts: slice }),
+        });
+        const j = await r.json();
+        if (j.ok && Array.isArray(j.results)) {
+          allResults.push(...j.results);
+          okCount += j.summary?.fully_ok || 0;
+          failCount += (j.summary?.total || 0) - (j.summary?.saved || 0);
+          // refresca la lista para que el usuario vea las nuevas cuentas YA
+          await loadAccounts();
+        } else {
+          showToast(j.error || `Error en chunk ${i / CHUNK + 1}`);
+        }
+      } catch (e: any) {
+        showToast(`Error de red en chunk ${i / CHUNK + 1}: ${e.message}`);
+      }
     }
-    return j.results as VerifyResult[];
+
+    showToast(`✓ ${okCount}/${inputs.length} verificadas · ${failCount > 0 ? `${failCount} con error` : "todas OK"}`);
+    setShowBulkCsv(false);
+    return allResults;
   }
 
   return (
@@ -648,19 +673,32 @@ export default function ConnectAccountsPage() {
         <BulkIonosModal
           onClose={() => setShowBulkIonos(false)}
           onSubmit={async (rows) => {
-            const r = await fetch("/api/email-accounts/bulk-connect", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ accounts: rows }),
-            });
-            const j = await r.json();
-            if (j.ok) {
-              showToast(`✓ ${j.summary.fully_ok}/${j.summary.total} verificadas · ${j.summary.saved} guardadas`);
-              await loadAccounts();
-              setShowBulkIonos(false);
-            } else {
-              showToast(j.error || "Error");
+            // Mismo patrón que CSV: chunks de 5 con progreso visible.
+            const CHUNK = 5;
+            let okCount = 0;
+            for (let i = 0; i < rows.length; i += CHUNK) {
+              const slice = rows.slice(i, i + CHUNK);
+              const done = Math.min(i + slice.length, rows.length);
+              showToast(`Verificando ${done}/${rows.length} cuentas IONOS…`);
+              try {
+                const r = await fetch("/api/email-accounts/bulk-connect", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ accounts: slice }),
+                });
+                const j = await r.json();
+                if (j.ok) {
+                  okCount += j.summary?.fully_ok || 0;
+                  await loadAccounts();
+                } else {
+                  showToast(j.error || "Error en chunk");
+                }
+              } catch (e: any) {
+                showToast(`Red: ${e.message}`);
+              }
             }
+            showToast(`✓ ${okCount}/${rows.length} cuentas IONOS verificadas`);
+            setShowBulkIonos(false);
           }}
         />
       )}

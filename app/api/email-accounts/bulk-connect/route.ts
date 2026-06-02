@@ -27,6 +27,7 @@ import {
   safe,
 } from "@/lib/email-accounts";
 import { writeJson } from "@/lib/storage";
+import { scopedKey } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 // Sin maxDuration estricto — corre en Node runtime (Docker / Railway) que no
@@ -263,8 +264,10 @@ export async function POST(req: NextRequest) {
   // carga sobre el server. 1000 cuentas tardarán ~5-8 min pero no fallan.
 
   const t0 = Date.now();
-  // Concurrencia 10 (antes 5) para que los lotes grandes vayan más rápido
-  const rawResults = (await runWithConcurrency(accounts, 10, processOne)) as (VerifyResult & { _accountFull?: EmailAccount })[];
+  // Cliente manda chunks de 5 → concurrencia 5 procesa cada chunk en paralelo
+  // total. Para chunks más grandes, escalamos hasta 10.
+  const concurrency = Math.min(10, Math.max(3, accounts.length));
+  const rawResults = (await runWithConcurrency(accounts, concurrency, processOne)) as (VerifyResult & { _accountFull?: EmailAccount })[];
 
   // Persistencia atómica: leemos la lista actual, mergeamos por email, escribimos UNA vez.
   // Así evitamos race conditions cuando 5 cuentas escriben en paralelo.
@@ -283,7 +286,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  await writeJson("email-accounts", Array.from(byEmail.values()));
+  await writeJson(await scopedKey("email-accounts"), Array.from(byEmail.values()));
 
   // Limpiamos el campo interno antes de enviar al cliente.
   const results: VerifyResult[] = rawResults.map(({ _accountFull, ...rest }) => rest);
