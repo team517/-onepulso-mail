@@ -448,10 +448,23 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   await saveCampaign(campaign);
 }
 
-/** Una iteración del worker — revisa todas las campañas. */
+/** Una iteración del worker — itera todos los workspaces y procesa cada uno aislado. */
 export async function tickWorker() {
   STATE.last_loop_at = new Date().toISOString();
   STATE.loops += 1;
+  const { listAllWorkspaces, withWorkspace } = await import("./workspace");
+  const workspaces = await listAllWorkspaces();
+  for (const ws of workspaces) {
+    try {
+      await withWorkspace(ws, () => tickWorkspace());
+    } catch (e: any) {
+      log({ level: "error", message: `Tick workspace ${ws} error: ${e.message}` });
+    }
+  }
+}
+
+/** Procesa un único workspace (cuentas + campañas + follow-ups + sync). */
+async function tickWorkspace() {
   try {
     const accounts = await listEmailAccounts();
     const campaigns = await listCampaigns();

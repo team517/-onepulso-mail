@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUserByEmail, updateUser, verifyPassword } from "@/lib/users";
 import { getSettings } from "@/lib/settings";
+import { signSession } from "@/lib/workspace";
 
 const AUTH_EMAIL = (process.env.AUTH_EMAIL || "team@onepulso.online").trim();
 const AUTH_PASSWORD = (process.env.AUTH_PASSWORD || "Xarifa229%").trim();
-const SESSION_TOKEN = process.env.AUTH_SECRET || "onepulso-mail-2026-session";
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     let authed = false;
     let displayName: string | undefined;
     let role: "admin" | "user" = "admin";
+    let sessionUserId: string | null = null;
 
     // 1. Comprueba usuarios creados en la plataforma (multi-usuario)
     const user = await getUserByEmail(email);
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
       authed = true;
       displayName = user.name || user.email.split("@")[0];
       role = user.role;
+      sessionUserId = user.id;
       await updateUser(user.id, { last_login_at: new Date().toISOString() });
     }
 
@@ -34,6 +36,7 @@ export async function POST(req: NextRequest) {
       authed = true;
       displayName = "Admin";
       role = "admin";
+      sessionUserId = "__admin__";
     }
 
     if (!authed) {
@@ -56,7 +59,7 @@ export async function POST(req: NextRequest) {
     });
     res.cookies.set({
       name: "onepulso_session",
-      value: SESSION_TOKEN,
+      value: signSession(sessionUserId!),
       httpOnly: true,
       secure: isHttps,
       sameSite: "lax",

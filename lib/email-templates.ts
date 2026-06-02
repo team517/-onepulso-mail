@@ -6,8 +6,9 @@
  */
 import crypto from "crypto";
 import { readJson, writeJson } from "./storage";
+import { scopedKey } from "./workspace";
 
-const KEY = "email-templates";
+async function KEY() { return scopedKey("email-templates"); }
 
 export type Template = {
   id: string;
@@ -23,7 +24,7 @@ export type Template = {
 };
 
 export async function listTemplates(): Promise<Template[]> {
-  const arr = await readJson<Template[]>(KEY);
+  const arr = await readJson<Template[]>(await KEY());
   return Array.isArray(arr) ? arr : [];
 }
 
@@ -48,7 +49,7 @@ export async function createTemplate(data: Partial<Template>): Promise<Template>
   };
   const all = await listTemplates();
   all.unshift(t);
-  await writeJson(KEY, all);
+  await writeJson(await KEY(),all);
   return t;
 }
 
@@ -63,7 +64,7 @@ export async function updateTemplate(id: string, patch: Partial<Template>): Prom
     created_at: all[idx].created_at,
     updated_at: new Date().toISOString(),
   };
-  await writeJson(KEY, all);
+  await writeJson(await KEY(),all);
   return all[idx];
 }
 
@@ -71,7 +72,7 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   const all = await listTemplates();
   const next = all.filter((t) => t.id !== id);
   if (next.length === all.length) return false;
-  await writeJson(KEY, next);
+  await writeJson(await KEY(),next);
   return true;
 }
 
@@ -82,5 +83,5 @@ export async function markTemplateUsed(id: string): Promise<void> {
   if (idx < 0) return;
   all[idx].used_count = (all[idx].used_count || 0) + 1;
   all[idx].last_used_at = new Date().toISOString();
-  await writeJson(KEY, all);
+  await writeJson(await KEY(),all);
 }

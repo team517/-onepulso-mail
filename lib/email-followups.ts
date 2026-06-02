@@ -13,8 +13,9 @@
  */
 import crypto from "crypto";
 import { readJson, writeJson } from "./storage";
+import { scopedKey } from "./workspace";
 
-const KEY = "email-followups";
+async function KEY() { return scopedKey("email-followups"); }
 
 export type FollowUpStatus = "pending" | "sent" | "cancelled" | "failed";
 
@@ -46,7 +47,7 @@ export type FollowUp = {
 };
 
 export async function listFollowUps(): Promise<FollowUp[]> {
-  const arr = await readJson<FollowUp[]>(KEY);
+  const arr = await readJson<FollowUp[]>(await KEY());
   return Array.isArray(arr) ? arr : [];
 }
 
@@ -64,7 +65,7 @@ export async function createFollowUp(data: Omit<FollowUp, "id" | "status" | "cre
   };
   const all = await listFollowUps();
   all.push(f);
-  await writeJson(KEY, all);
+  await writeJson(await KEY(),all);
   return f;
 }
 
@@ -73,7 +74,7 @@ export async function updateFollowUp(id: string, patch: Partial<FollowUp>): Prom
   const idx = all.findIndex((f) => f.id === id);
   if (idx < 0) return null;
   all[idx] = { ...all[idx], ...patch };
-  await writeJson(KEY, all);
+  await writeJson(await KEY(),all);
   return all[idx];
 }
 
@@ -90,6 +91,6 @@ export async function deleteFollowUp(id: string): Promise<boolean> {
   const all = await listFollowUps();
   const next = all.filter((f) => f.id !== id);
   if (next.length === all.length) return false;
-  await writeJson(KEY, next);
+  await writeJson(await KEY(),next);
   return true;
 }

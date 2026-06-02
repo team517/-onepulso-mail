@@ -12,8 +12,9 @@
  */
 import crypto from "crypto";
 import { readJson, writeJson } from "./storage";
+import { scopedKey } from "./workspace";
 
-const KEY = "email-sent";
+async function KEY() { return scopedKey("email-sent"); }
 
 export type SentType = "reply" | "followup" | "test" | "campaign";
 
@@ -59,7 +60,7 @@ export type SentMessage = {
 };
 
 export async function listSent(): Promise<SentMessage[]> {
-  const arr = await readJson<SentMessage[]>(KEY);
+  const arr = await readJson<SentMessage[]>(await KEY());
   return Array.isArray(arr) ? arr : [];
 }
 
@@ -73,7 +74,7 @@ export async function logSentMessage(data: Omit<SentMessage, "id" | "sent_at">):
   all.push(entry);
   // Mantén máximo 5000 entradas (los más recientes)
   all.sort((a, b) => (b.sent_at || "").localeCompare(a.sent_at || ""));
-  await writeJson(KEY, all.slice(0, 5000));
+  await writeJson(await KEY(),all.slice(0, 5000));
   return entry;
 }
 
@@ -86,6 +87,6 @@ export async function deleteSent(id: string): Promise<boolean> {
   const all = await listSent();
   const next = all.filter((s) => s.id !== id);
   if (next.length === all.length) return false;
-  await writeJson(KEY, next);
+  await writeJson(await KEY(),next);
   return true;
 }

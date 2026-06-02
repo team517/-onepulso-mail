@@ -49,27 +49,28 @@ export type InboxMeta = {
   total_messages: number;
 };
 
-const MSG_KEY = (accountId: string) => `email-inbox/${accountId}/messages`;
-const META_KEY = (accountId: string) => `email-inbox/${accountId}/meta`;
+import { scopedKey } from "./workspace";
+const MSG_KEY = (accountId: string) => scopedKey(`email-inbox/${accountId}/messages`);
+const META_KEY = (accountId: string) => scopedKey(`email-inbox/${accountId}/meta`);
 
 export async function listMessagesForAccount(accountId: string): Promise<InboxMessage[]> {
-  const arr = await readJson<InboxMessage[]>(MSG_KEY(accountId));
+  const arr = await readJson<InboxMessage[]>(await MSG_KEY(accountId));
   return Array.isArray(arr) ? arr : [];
 }
 
 export async function writeMessagesForAccount(accountId: string, msgs: InboxMessage[]) {
   // Mantener máximo 500 por cuenta (los más recientes)
   const sorted = msgs.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  await writeJson(MSG_KEY(accountId), sorted.slice(0, 500));
+  await writeJson(await MSG_KEY(accountId), sorted.slice(0, 500));
 }
 
 export async function getMeta(accountId: string): Promise<InboxMeta> {
-  const m = await readJson<InboxMeta>(META_KEY(accountId));
+  const m = await readJson<InboxMeta>(await META_KEY(accountId));
   return m || { account_id: accountId, last_sync: null, last_error: null, last_uid: null, total_messages: 0 };
 }
 
 export async function writeMeta(accountId: string, meta: InboxMeta) {
-  await writeJson(META_KEY(accountId), meta);
+  await writeJson(await META_KEY(accountId), meta);
 }
 
 /** Genera un thread_id estable a partir de References, In-Reply-To y Message-Id. */

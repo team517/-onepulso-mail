@@ -16,10 +16,11 @@
  */
 import crypto from "crypto";
 import { readJson, writeJson, deleteJson } from "./storage";
+import { scopedKey } from "./workspace";
 
-const IDX_KEY = "email-campaigns/index";
-const KEY = (id: string) => `email-campaigns/${id}`;
-const LEADS_KEY = (id: string) => `email-campaigns/${id}/leads`;
+async function IDX_KEY() { return scopedKey("email-campaigns/index"); }
+async function KEY(id: string) { return scopedKey(`email-campaigns/${id}`); }
+async function LEADS_KEY(id: string) { return scopedKey(`email-campaigns/${id}/leads`); }
 
 /* ── Tipos ────────────────────────────────────────────────────────────── */
 
@@ -219,18 +220,18 @@ export function newCampaign(name: string): Campaign {
 /* ── Persistencia ─────────────────────────────────────────────────────── */
 
 async function readIndex(): Promise<string[]> {
-  const arr = await readJson<string[]>(IDX_KEY);
+  const arr = await readJson<string[]>(await IDX_KEY());
   return Array.isArray(arr) ? arr : [];
 }
 async function writeIndex(ids: string[]) {
-  await writeJson(IDX_KEY, ids);
+  await writeJson(await IDX_KEY(), ids);
 }
 
 export async function listCampaigns(): Promise<Campaign[]> {
   const ids = await readIndex();
   const out: Campaign[] = [];
   for (const id of ids) {
-    const c = await readJson<Campaign>(KEY(id));
+    const c = await readJson<Campaign>(await KEY(id));
     if (c) out.push(c);
   }
   // Más recientes primero
@@ -239,12 +240,12 @@ export async function listCampaigns(): Promise<Campaign[]> {
 }
 
 export async function getCampaign(id: string): Promise<Campaign | null> {
-  return await readJson<Campaign>(KEY(id));
+  return await readJson<Campaign>(await KEY(id));
 }
 
 export async function saveCampaign(c: Campaign): Promise<Campaign> {
   c.updated_at = new Date().toISOString();
-  await writeJson(KEY(c.id), c);
+  await writeJson(await KEY(c.id), c);
   const ids = await readIndex();
   if (!ids.includes(c.id)) {
     ids.push(c.id);
@@ -258,8 +259,8 @@ export async function deleteCampaign(id: string): Promise<boolean> {
   const next = ids.filter((i) => i !== id);
   if (next.length === ids.length) return false;
   await writeIndex(next);
-  await deleteJson(KEY(id));
-  await deleteJson(LEADS_KEY(id));
+  await deleteJson(await KEY(id));
+  await deleteJson(await LEADS_KEY(id));
   return true;
 }
 
@@ -292,12 +293,12 @@ export async function duplicateCampaign(id: string, newName?: string): Promise<C
 /* ── Leads ────────────────────────────────────────────────────────────── */
 
 export async function listLeads(campaignId: string): Promise<Lead[]> {
-  const arr = await readJson<Lead[]>(LEADS_KEY(campaignId));
+  const arr = await readJson<Lead[]>(await LEADS_KEY(campaignId));
   return Array.isArray(arr) ? arr : [];
 }
 
 export async function writeLeads(campaignId: string, leads: Lead[]) {
-  await writeJson(LEADS_KEY(campaignId), leads);
+  await writeJson(await LEADS_KEY(campaignId), leads);
 }
 
 export function newLead(email: string, variables: Record<string, string> = {}): Lead {

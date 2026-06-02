@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [mode, setMode]         = useState<"login" | "signup">("login");
+  const [name, setName]         = useState("");
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState("7");
@@ -15,16 +17,20 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      const res  = await fetch("/api/auth/login", {
+      const endpoint = mode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+      const payload: any = { email, password };
+      if (mode === "login") payload.remember = parseInt(remember);
+      if (mode === "signup") payload.name = name;
+      const res  = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, remember: parseInt(remember) }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (res.ok) {
         router.push("/connect-accounts");
       } else {
-        setError(data.hint ? `${data.error} — ${data.hint}` : (data.error || "Credenciales incorrectas"));
+        setError(data.hint ? `${data.error} — ${data.hint}` : (data.error || "Error"));
       }
     } catch {
       setError("Error de conexión");
@@ -109,7 +115,7 @@ export default function LoginPage() {
             lineHeight: 1.05,
             color: "#0a0d14",
           }}>
-            Bienvenido <span style={{
+            {mode === "login" ? "Bienvenido " : "Crea tu "}<span style={{
               fontFamily: "'Instrument Serif', serif",
               fontStyle: "italic",
               fontWeight: 400,
@@ -118,7 +124,7 @@ export default function LoginPage() {
               WebkitBackgroundClip: "text",
               backgroundClip: "text",
               color: "transparent",
-            }}>de vuelta</span>
+            }}>{mode === "login" ? "de vuelta" : "cuenta"}</span>
           </h1>
 
           <p style={{
@@ -127,7 +133,9 @@ export default function LoginPage() {
             margin: 0,
             lineHeight: 1.5,
           }}>
-            Inicia sesión para conectar tus cuentas y lanzar tu próxima campaña.
+            {mode === "login"
+              ? "Inicia sesión para conectar tus cuentas y lanzar tu próxima campaña."
+              : "Tu workspace es 100% independiente — cuentas, leads y campañas privadas."}
           </p>
         </div>
 
@@ -140,6 +148,22 @@ export default function LoginPage() {
           boxShadow: "0 18px 48px rgba(10,13,20,0.08), 0 0 0 1px rgba(10,13,20,0.04)",
         }}>
           <form onSubmit={handleSubmit}>
+
+            {/* Name — solo en signup */}
+            {mode === "signup" && (
+              <div style={{ marginBottom: 18 }}>
+                <label style={labelStyle}>Nombre (opcional)</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Tu nombre"
+                  style={inputStyle}
+                  onFocus={e => { e.target.style.borderColor = "#0a0d14"; e.target.style.boxShadow = "0 0 0 3px rgba(10,13,20,0.06)"; }}
+                  onBlur={e => { e.target.style.borderColor = "#e0e0e3"; e.target.style.boxShadow = "none"; }}
+                />
+              </div>
+            )}
 
             {/* Email */}
             <div style={{ marginBottom: 18 }}>
@@ -183,7 +207,8 @@ export default function LoginPage() {
               />
             </div>
 
-            {/* Remember */}
+            {/* Remember — solo en login */}
+            {mode === "login" && (
             <div style={{ marginBottom: 26 }}>
               <label style={labelStyle}>Mantener sesión</label>
               <select
@@ -205,6 +230,7 @@ export default function LoginPage() {
                 <option value="90">3 meses</option>
               </select>
             </div>
+            )}
 
             {/* Error */}
             {error && (
@@ -256,9 +282,9 @@ export default function LoginPage() {
                 if (!loading) (e.currentTarget as HTMLButtonElement).style.filter = "none";
               }}
             >
-              {loading ? "Iniciando sesión…" : (
+              {loading ? (mode === "signup" ? "Creando cuenta…" : "Iniciando sesión…") : (
                 <>
-                  Iniciar sesión
+                  {mode === "signup" ? "Crear cuenta" : "Iniciar sesión"}
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
@@ -267,6 +293,36 @@ export default function LoginPage() {
             </button>
 
           </form>
+
+          {/* Toggle login / signup */}
+          <div style={{
+            textAlign: "center",
+            marginTop: 22,
+            paddingTop: 22,
+            borderTop: "1px solid #ececef",
+            fontSize: 13.5,
+            color: "#54565b",
+          }}>
+            {mode === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}
+            <button
+              type="button"
+              onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
+              style={{
+                background: "transparent",
+                border: 0,
+                padding: 0,
+                color: "#0a0d14",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: 13.5,
+                textDecoration: "underline",
+                textUnderlineOffset: 3,
+                fontFamily: "'Inter', system-ui, sans-serif",
+              }}
+            >
+              {mode === "login" ? "Crear una" : "Iniciar sesión"}
+            </button>
+          </div>
         </div>
 
         {/* Footer */}

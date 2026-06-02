@@ -1,8 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const SESSION_TOKEN = process.env.AUTH_SECRET || "onepulso-mail-2026-session";
+const SECRET = process.env.AUTH_SECRET || "onepulso-mail-2026-session";
 
-export function middleware(req: NextRequest) {
+/** HMAC-SHA256 con Web Crypto (compatible con edge runtime). */
+async function verifySession(value: string): Promise<string | null> {
+  if (!value || !value.includes(".")) return null;
+  const idx = value.lastIndexOf(".");
+  const userId = value.slice(0, idx);
+  const sig = value.slice(idx + 1);
+  if (!userId || !sig || sig.length !== 32) return null;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const macBuf = await crypto.subtle.sign("HMAC", key, enc.encode(userId));
+  const macHex = Array.from(new Uint8Array(macBuf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
+  // timing-safe compare por longitud constante
+  if (macHex.length !== sig.length) return null;
+  let diff = 0;
+  for (let i = 0; i < macHex.length; i++) diff |= macHex.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0 ? userId : null;
+}
+
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Rutas públicas - no requieren auth
@@ -19,8 +46,9 @@ export function middleware(req: NextRequest) {
   }
 
   const token = req.cookies.get("onepulso_session")?.value;
+  const userId = token ? await verifySession(token) : null;
 
-  if (!token || token !== SESSION_TOKEN) {
+  if (!userId) {
     // Anónimo en la raíz → landing pública.
     if (pathname === "/") {
       return NextResponse.redirect(new URL("/landing", req.url));
