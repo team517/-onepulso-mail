@@ -395,7 +395,7 @@ export default function ConnectAccountsPage() {
             <NavLink onClick={() => router.push("/bandejas")}>Bandejas</NavLink>
             <NavLink onClick={() => router.push("/plantillas")}>Plantillas</NavLink>
             <NavLink onClick={() => router.push("/logs")}>Logs</NavLink>
-            <NavLink onClick={() => showToast("Configuración · próximamente")}>Configuración</NavLink>
+            <NavLink onClick={() => router.push("/configuracion")}>Configuración</NavLink>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
             <span style={eyebrowSm}><span style={dotPulse} /> {stats.ok}/{stats.total} bandejas activas</span>

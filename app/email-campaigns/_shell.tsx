@@ -71,7 +71,7 @@ export function TopNav({ activeKey, onLogout, toast: showToast }: {
           <NavLink active={activeKey === "bandejas"}   onClick={() => router.push("/bandejas")}>Bandejas</NavLink>
           <NavLink active={activeKey === "plantillas"} onClick={() => router.push("/plantillas")}>Plantillas</NavLink>
           <NavLink active={activeKey === "logs"}       onClick={() => router.push("/logs")}>Logs</NavLink>
-          <NavLink active={activeKey === "config"}     onClick={placeholder("Configuración")}>Configuración</NavLink>
+          <NavLink active={activeKey === "config"}     onClick={() => router.push("/configuracion")}>Configuración</NavLink>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           <button onClick={onLogout} style={{

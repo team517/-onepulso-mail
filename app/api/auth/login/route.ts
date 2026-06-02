@@ -1,42 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getUserByEmail, updateUser, verifyPassword } from "@/lib/users";
+import { getSettings } from "@/lib/settings";
 
 const AUTH_EMAIL = (process.env.AUTH_EMAIL || "team@onepulso.online").trim();
 const AUTH_PASSWORD = (process.env.AUTH_PASSWORD || "Xarifa229%").trim();
-const SESSION_TOKEN = process.env.AUTH_SECRET || "onepulso-xarifa-2026-session";
+const SESSION_TOKEN = process.env.AUTH_SECRET || "onepulso-mail-2026-session";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const email = String(body.email || "").toLowerCase().trim();
     const password = String(body.password || "").trim();
-    const remember = Math.max(1, Math.min(365, Number(body.remember) || 7));
 
-    const expectedEmail = AUTH_EMAIL.toLowerCase();
+    const settings = await getSettings();
+    const requested = Number(body.remember) || settings.default_session_days;
+    const remember = Math.max(1, Math.min(settings.max_session_days, requested));
 
-    if (email !== expectedEmail) {
+    let authed = false;
+    let displayName: string | undefined;
+    let role: "admin" | "user" = "admin";
+
+    // 1. Comprueba usuarios creados en la plataforma (multi-usuario)
+    const user = await getUserByEmail(email);
+    if (user && verifyPassword(password, user)) {
+      authed = true;
+      displayName = user.name || user.email.split("@")[0];
+      role = user.role;
+      await updateUser(user.id, { last_login_at: new Date().toISOString() });
+    }
+
+    // 2. Fallback al AUTH_EMAIL / AUTH_PASSWORD env (admin de emergencia)
+    if (!authed && email === AUTH_EMAIL.toLowerCase() && password === AUTH_PASSWORD) {
+      authed = true;
+      displayName = "Admin";
+      role = "admin";
+    }
+
+    if (!authed) {
       return NextResponse.json(
         {
           error: "Email o contraseña incorrectos",
-          hint: "El email no coincide con el configurado",
+          hint: user ? "Contraseña incorrecta" : "No hay usuario con ese email — créalo desde Configuración",
         },
         { status: 401 }
       );
     }
-    if (password !== AUTH_PASSWORD) {
-      return NextResponse.json(
-        {
-          error: "Email o contraseña incorrectos",
-          hint: `La contraseña no coincide. Esperado ${AUTH_PASSWORD.length} caracteres, recibido ${password.length}`,
-        },
-        { status: 401 }
-      );
-    }
 
-    // Detectar si la request viene por HTTPS (producción)
     const proto = req.headers.get("x-forwarded-proto") || req.nextUrl.protocol.replace(":", "");
     const isHttps = proto === "https";
 
-    const res = NextResponse.json({ ok: true });
+    const res = NextResponse.json({
+      ok: true,
+      user: { email, name: displayName, role },
+      session_days: remember,
+    });
     res.cookies.set({
       name: "onepulso_session",
       value: SESSION_TOKEN,
@@ -54,13 +71,9 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** GET muestra qué email está configurado (sin password) para debug */
 export async function GET() {
   return NextResponse.json({
     expected_email: AUTH_EMAIL,
-    password_length: AUTH_PASSWORD.length,
-    has_env_email: !!process.env.AUTH_EMAIL,
-    has_env_password: !!process.env.AUTH_PASSWORD,
-    has_env_secret: !!process.env.AUTH_SECRET,
+    multi_user: true,
   });
 }
