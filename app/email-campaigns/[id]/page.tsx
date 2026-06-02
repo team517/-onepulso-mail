@@ -1971,6 +1971,23 @@ function CsvUploadModal({ campaignId, campaign, onClose, onDone, toast }: {
             </div>
           </div>
 
+          {/* Duplicate checker */}
+          <DuplicateChecker
+            campaignId={campaignId}
+            emails={parsed.rows.filter((r) => !r.__error).map((r) => r.email)}
+            onDeselectDuplicates={(dupEmails) => {
+              // Deselect any row whose email is in the duplicate list
+              const dupSet = new Set(dupEmails.map((e) => e.toLowerCase()));
+              setSelectedLines((prev) => {
+                const next = new Set(prev);
+                for (const r of parsed.rows) {
+                  if (dupSet.has(r.email.toLowerCase())) next.delete(r.line);
+                }
+                return next;
+              });
+            }}
+          />
+
           {/* Row controls */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12.5, color: INK_3 }}>
@@ -2097,6 +2114,177 @@ const pageBtn: React.CSSProperties = {
   fontFamily: FONT_UI, fontSize: 14, fontWeight: 600,
   cursor: "pointer",
 };
+
+/**
+ * Componente que comprueba duplicados de los emails antes de importar.
+ * Estilo Instantly: checkboxes con scope (esta campaña / otras / blocklist)
+ * + panel con resumen + botón "Quitar duplicados de la selección".
+ */
+function DuplicateChecker({ campaignId, emails, onDeselectDuplicates }: {
+  campaignId: string;
+  emails: string[];
+  onDeselectDuplicates: (dupEmails: string[]) => void;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<null | {
+    total: number;
+    in_this_campaign: string[];
+    in_other_campaigns: { email: string; campaigns: { id: string; name: string; status: string }[] }[];
+    blocked: string[];
+    unique: string[];
+    summary: { duplicates_in_this_campaign: number; duplicates_in_other_campaigns: number; blocked: number; unique: number };
+  }>(null);
+  const [scopeThis, setScopeThis] = useState(true);
+  const [scopeOther, setScopeOther] = useState(true);
+  const [scopeBlock, setScopeBlock] = useState(true);
+
+  async function check() {
+    if (emails.length === 0) return;
+    setChecking(true);
+    setResult(null);
+    try {
+      const r = await fetch(`/api/email-campaigns/${campaignId}/check-duplicates`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          emails,
+          scope: { this_campaign: scopeThis, other_campaigns: scopeOther, blocklist: scopeBlock },
+        }),
+      });
+      const j = await r.json();
+      if (j.total !== undefined) setResult(j);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const totalDups = result
+    ? result.summary.duplicates_in_this_campaign + result.summary.duplicates_in_other_campaigns + result.summary.blocked
+    : 0;
+
+  return (
+    <div style={{
+      marginBottom: 14, padding: "12px 14px",
+      background: result && totalDups > 0 ? "rgba(249,166,3,0.06)" : SURF,
+      border: `1px solid ${result && totalDups > 0 ? "rgba(249,166,3,0.25)" : LINE}`,
+      borderRadius: 10,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: INK, fontFamily: FONT_SANS, display: "flex", alignItems: "center", gap: 6 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+          Verificar leads repetidos
+        </div>
+        <span style={{ fontSize: 11.5, color: INK_3 }}>
+          Comprueba si los {emails.length} emails ya están en otras partes:
+        </span>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: INK_2, cursor: "pointer" }}>
+          <input type="checkbox" checked={scopeThis} onChange={(e) => setScopeThis(e.target.checked)} />
+          Esta campaña
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: INK_2, cursor: "pointer" }}>
+          <input type="checkbox" checked={scopeOther} onChange={(e) => setScopeOther(e.target.checked)} />
+          Otras campañas
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: INK_2, cursor: "pointer" }}>
+          <input type="checkbox" checked={scopeBlock} onChange={(e) => setScopeBlock(e.target.checked)} />
+          Lista bloqueada
+        </label>
+        <button onClick={check} disabled={checking || emails.length === 0} style={{
+          ...ghostBtn, marginLeft: "auto", height: 30, fontSize: 12, fontWeight: 600,
+          opacity: checking || emails.length === 0 ? 0.55 : 1,
+        }}>
+          {checking ? "Verificando…" : "Verificar ahora"}
+        </button>
+      </div>
+
+      {result && (
+        <div style={{ marginTop: 12 }}>
+          {/* Resumen rápido */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <DupStat label="Únicos" value={result.summary.unique} color={GREEN} />
+            <DupStat label="En esta campaña" value={result.summary.duplicates_in_this_campaign} color={INK_3} />
+            <DupStat label="En otras campañas" value={result.summary.duplicates_in_other_campaigns} color={"#b97500"} />
+            <DupStat label="Bloqueados" value={result.summary.blocked} color={"#c12530"} />
+          </div>
+
+          {totalDups === 0 ? (
+            <div style={{ fontSize: 12.5, color: GREEN, fontWeight: 600 }}>
+              ✓ No hay duplicados. Todos los {result.summary.unique} emails son nuevos.
+            </div>
+          ) : (
+            <>
+              {/* Acción rápida */}
+              <button
+                onClick={() => {
+                  const allDups = [
+                    ...result.in_this_campaign,
+                    ...result.in_other_campaigns.map((x) => x.email),
+                    ...result.blocked,
+                  ];
+                  onDeselectDuplicates(allDups);
+                }}
+                style={{
+                  ...brandBtn, height: 36, fontSize: 13,
+                  background: "linear-gradient(112deg, #f9a603 0%, #f59e3a 60%, #ea7fd3 100%)",
+                }}
+              >
+                Quitar {totalDups} duplicado{totalDups === 1 ? "" : "s"} de la selección
+              </button>
+
+              {/* Detalle expandible */}
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ cursor: "pointer", fontSize: 12, color: INK_3, fontWeight: 600 }}>
+                  Ver detalles
+                </summary>
+                <div style={{ marginTop: 8, maxHeight: 180, overflow: "auto", fontSize: 12, fontFamily: FONT_MONO, color: INK_3 }}>
+                  {result.in_this_campaign.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <strong style={{ color: INK_2 }}>Ya en esta campaña ({result.in_this_campaign.length}):</strong>
+                      <div style={{ paddingLeft: 12 }}>
+                        {result.in_this_campaign.slice(0, 50).map((e) => <div key={e}>• {e}</div>)}
+                        {result.in_this_campaign.length > 50 && <div>… y {result.in_this_campaign.length - 50} más</div>}
+                      </div>
+                    </div>
+                  )}
+                  {result.in_other_campaigns.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <strong style={{ color: INK_2 }}>En otras campañas ({result.in_other_campaigns.length}):</strong>
+                      <div style={{ paddingLeft: 12 }}>
+                        {result.in_other_campaigns.slice(0, 50).map((d) => (
+                          <div key={d.email}>• {d.email} <span style={{ color: INK_4 }}>→ {d.campaigns.map((c) => c.name).join(", ")}</span></div>
+                        ))}
+                        {result.in_other_campaigns.length > 50 && <div>… y {result.in_other_campaigns.length - 50} más</div>}
+                      </div>
+                    </div>
+                  )}
+                  {result.blocked.length > 0 && (
+                    <div>
+                      <strong style={{ color: "#c12530" }}>Bloqueados ({result.blocked.length}):</strong>
+                      <div style={{ paddingLeft: 12 }}>
+                        {result.blocked.slice(0, 50).map((e) => <div key={e}>• {e}</div>)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </details>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DupStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div style={{
+      padding: "6px 10px", background: "#fff", border: `1px solid ${LINE}`, borderRadius: 8,
+      display: "inline-flex", flexDirection: "column", gap: 0, minWidth: 90,
+    }}>
+      <span style={{ fontSize: 10, fontWeight: 700, color: INK_4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
+      <span style={{ fontFamily: FONT_SANS, fontSize: 16, fontWeight: 800, color, letterSpacing: "-0.02em", lineHeight: 1 }}>{value}</span>
+    </div>
+  );
+}
 
 function HeaderChip({ raw, key_, isEmail }: { raw: string; key_: string; isEmail?: boolean }) {
   return (
