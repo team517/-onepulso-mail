@@ -110,13 +110,16 @@ function log(entry: Omit<WorkerLogEntry, "at">) {
 
   STATE.log.push(newEntry);
 
-  // Limpieza por edad:
-  //  · info → 30 min
-  //  · warn → 2 h
-  //  · error/send → 24 h
+  // Limpieza por edad — los ENVÍOS reales viven en email-sent (Postgres,
+  // permanentes y visibles en /bandejas → Enviados). Este log es solo el
+  // "live feed" del worker, así que se purga agresivo:
+  //  · info → 1 h (sync IMAP, ticks, etc. — útil para debug reciente, no para historial)
+  //  · warn → 4 h
+  //  · error → 24 h
+  //  · send → 24 h (duplicado del email-sent, pero útil ver inmediatez en /logs)
   const ageLimits: Record<string, number> = {
-    info: 30 * 60_000,
-    warn: 2 * 60 * 60_000,
+    info: 60 * 60_000,
+    warn: 4 * 60 * 60_000,
     error: 24 * 60 * 60_000,
     send: 24 * 60 * 60_000,
   };
@@ -125,8 +128,8 @@ function log(entry: Omit<WorkerLogEntry, "at">) {
     return now - new Date(e.at).getTime() < limit;
   });
 
-  // Tope duro: 500 entradas
-  if (STATE.log.length > 500) STATE.log.splice(0, STATE.log.length - 500);
+  // Tope duro: 300 entradas (antes 500)
+  if (STATE.log.length > 300) STATE.log.splice(0, STATE.log.length - 300);
 }
 
 export function getWorkerStatus() {
