@@ -1,73 +1,58 @@
 /**
- * Migración one-shot: mueve todos los datos legacy (sin prefix de workspace)
- * al workspace del admin (`ws/{DEFAULT_ADMIN_WS}/...`).
+ * MIGRACIÓN DESACTIVADA — y rollback de la anterior.
  *
- * Antes del multi-tenant las keys eran:
- *   email-accounts, email-campaigns/index, email-campaigns/{id},
- *   email-campaigns/{id}/leads, email-inbox/{accId}/messages,
- *   email-inbox/{accId}/meta, email-blocklist, email-followups,
- *   email-sent, email-templates
+ * La migración original copió datos legacy al workspace del admin sin
+ * distinguir a qué usuario pertenecían realmente. Resultado: cuentas de
+ * varios usuarios (admin + Tiare etc.) acabaron mezcladas en el workspace
+ * `ws/{adminWs}/...`.
  *
- * Ahora son:
- *   ws/{adminWs}/email-accounts, ws/{adminWs}/email-campaigns/index, ...
+ * Esta versión:
+ *   - BORRA todo lo que la migración previa hubiera copiado al admin workspace
+ *     (excepto el marker para que no se vuelva a ejecutar).
+ *   - Mantiene los datos legacy intactos en su key original (sin prefix) —
+ *     ningún read del nuevo sistema los toca, pero quedan recuperables en
+ *     Postgres por si el admin los quiere importar a mano más adelante.
+ *   - Marca como completada para que NUNCA vuelva a correr.
  *
- * Se ejecuta UNA vez al boot. Marca `ws/{adminWs}/__migrated_v1` cuando
- * termina para no repetirse en el siguiente arranque.
+ * Cada usuario — incluido el admin — empieza con su workspace vacío y
+ * aislado. Reconectan sus cuentas SMTP/IMAP vía Bulk CSV / Bulk IONOS.
  */
-import { readJson, writeJson, listKeys } from "./storage";
+import { readJson, writeJson, deleteJson, listKeys } from "./storage";
 import { DEFAULT_ADMIN_WS } from "./workspace";
 
 const MIGRATION_MARKER = `ws/${DEFAULT_ADMIN_WS}/__migrated_v1`;
+const ROLLBACK_MARKER  = `ws/${DEFAULT_ADMIN_WS}/__rollback_v1`;
 
-/** Prefijos legacy que pertenecen a la plataforma de email. */
-const LEGACY_PREFIXES = [
-  "email-accounts",
-  "email-blocklist",
-  "email-followups",
-  "email-sent",
-  "email-templates",
-  "email-campaigns/",   // index + cada campaña + leads
-  "email-inbox/",       // mensajes + meta por cuenta
-];
-
-export async function migrateAdminWorkspaceIfNeeded(): Promise<{ migrated: number; skipped: boolean }> {
-  // Check marker
-  const marker = await readJson<{ at: string }>(MIGRATION_MARKER);
-  if (marker) return { migrated: 0, skipped: true };
-
-  let migrated = 0;
-  const seen = new Set<string>();
-
-  for (const prefix of LEGACY_PREFIXES) {
-    // Si el prefix NO termina en "/", es una key exacta (email-accounts, email-blocklist, etc.)
-    if (!prefix.endsWith("/")) {
-      if (seen.has(prefix)) continue;
-      seen.add(prefix);
-      const val = await readJson<any>(prefix);
-      if (val !== null && val !== undefined) {
-        await writeJson(`ws/${DEFAULT_ADMIN_WS}/${prefix}`, val);
-        migrated++;
-      }
-      continue;
-    }
-
-    // Prefix "directorio": listar todas las keys que empiezan así.
-    const keys = await listKeys(prefix);
-    for (const k of keys) {
-      if (seen.has(k)) continue;
-      // Saltar las que YA están scopeadas (evita recursividad)
-      if (k.startsWith("ws/")) continue;
-      seen.add(k);
-      const val = await readJson<any>(k);
-      if (val !== null && val !== undefined) {
-        await writeJson(`ws/${DEFAULT_ADMIN_WS}/${k}`, val);
-        migrated++;
-      }
-    }
+/** Roll-back idempotente: borra TODO lo que esté bajo el workspace del admin
+ *  (excepto el marker de rollback). Cualquier usuario que haga login después
+ *  arranca limpio. */
+export async function migrateAdminWorkspaceIfNeeded(): Promise<{ migrated: number; skipped: boolean; rolled_back?: number }> {
+  // Si el rollback ya corrió, no tocamos nada — admin puede haber añadido
+  // cuentas nuevas a su workspace y NO queremos borrarlas.
+  const rolledBack = await readJson<{ at: string }>(ROLLBACK_MARKER);
+  if (rolledBack) {
+    return { migrated: 0, skipped: true };
   }
 
-  // Marca como completada
-  await writeJson(MIGRATION_MARKER, { at: new Date().toISOString(), migrated });
+  // 1. Borrar TODO lo que esté bajo `ws/{adminWs}/` (datos contaminados
+  //    por la migración anterior). Excluye el ROLLBACK_MARKER (que aún
+  //    no existe en esta primera pasada).
+  const prefix = `ws/${DEFAULT_ADMIN_WS}/`;
+  const allKeys = await listKeys(prefix);
+  let deleted = 0;
+  for (const k of allKeys) {
+    if (k === ROLLBACK_MARKER) continue;
+    await deleteJson(k);
+    deleted++;
+  }
 
-  return { migrated, skipped: false };
+  // 2. Marca el rollback como hecho — Y también el MIGRATION_MARKER para
+  //    que la versión vieja de migración (que pudiera quedar caché) no
+  //    se ejecute.
+  const now = new Date().toISOString();
+  await writeJson(ROLLBACK_MARKER, { at: now, deleted });
+  await writeJson(MIGRATION_MARKER, { at: now, rolled_back: true });
+
+  console.log(`[migrate] rollback completo: ${deleted} keys borradas del admin workspace`);
+  return { migrated: 0, skipped: false, rolled_back: deleted };
 }

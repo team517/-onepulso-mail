@@ -42,7 +42,9 @@ export function verifySession(value: string): string | null {
   }
 }
 
-/** Workspace ID para la request actual. AsyncLocalStorage > cookies > default. */
+/** Workspace ID para la request actual. AsyncLocalStorage > cookies > anon.
+ *  NUNCA cae a admin si la sesión es inválida/ausente — eso provocaría que
+ *  un usuario sin sesión válida leyera/escribiera en el espacio del admin. */
 export async function getWorkspaceId(): Promise<string> {
   const fromCtx = ctx.getStore();
   if (fromCtx) return fromCtx;
@@ -55,7 +57,10 @@ export async function getWorkspaceId(): Promise<string> {
       if (userId) return `u-${userId}`;
     }
   } catch {}
-  return DEFAULT_ADMIN_WS;
+  // Workspace inerte: cualquier lectura devolverá vacío, cualquier escritura
+  // se almacena en un namespace huérfano que nadie más ve. El middleware
+  // debería haber redirigido a /login antes de llegar aquí.
+  return "anon-no-session";
 }
 
 /** Ejecuta una función en un workspace concreto. Lo usa el worker iterando users. */
