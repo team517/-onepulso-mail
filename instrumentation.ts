@@ -13,6 +13,23 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  // ── Migración one-shot: mueve datos legacy al workspace del admin ──
+  // Tu cuenta team@onepulso.online tenía cuentas/campañas guardadas
+  // SIN prefix de workspace (modelo viejo). Tras introducir multi-tenant
+  // los reads van a `ws/{adminWs}/...` y los datos antiguos quedan
+  // invisibles. Esta migración los copia al workspace del admin.
+  try {
+    const { migrateAdminWorkspaceIfNeeded } = await import("./lib/migrate-admin-workspace");
+    const r = await migrateAdminWorkspaceIfNeeded();
+    if (r.skipped) {
+      console.log("[instrumentation] admin-workspace migration already done");
+    } else {
+      console.log(`[instrumentation] admin-workspace migration: ${r.migrated} keys migrated`);
+    }
+  } catch (e: any) {
+    console.error("[instrumentation] admin-workspace migration failed:", e.message);
+  }
+
   try {
     const { startEmailScheduler } = await import("./lib/email-scheduler");
     startEmailScheduler();
