@@ -138,7 +138,26 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
       }
 
       result.new_count = fresh.length;
-      const merged = [...fresh, ...existing];
+
+      // Reclasifica is_warmup/is_bounce de los mensajes EXISTENTES con la heurística
+      // actual — así cuando endurecemos los filtros, los mensajes viejos también
+      // se filtran sin tener que resincronizar desde IMAP.
+      const reclassified = existing.map((m) => {
+        const wm = isWarmupMessage({
+          subject: m.subject, text: m.text, html: m.html,
+          from: m.from_address, fromName: m.from_name,
+        });
+        const bn = isBounceOrFailure({
+          from: m.from_address, fromAddress: m.from_address,
+          fromName: m.from_name, subject: m.subject, text: m.text,
+        });
+        if (wm !== m.is_warmup || bn !== m.is_bounce) {
+          return { ...m, is_warmup: wm, is_bounce: bn };
+        }
+        return m;
+      });
+
+      const merged = [...fresh, ...reclassified];
 
       // Dedupe por (account_id + uid + message_id) — preserva starred/user_read
       const seen = new Set<string>();
