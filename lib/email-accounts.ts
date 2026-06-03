@@ -47,6 +47,14 @@ export type EmailAccount = {
   warmup_limit?: number;
   warmup_increment?: number;
   sent_today?: number;
+  /** Día (yyyy-mm-dd local en TZ de la primera campaña que la use) al que
+   *  pertenece `sent_today`. Si cambia el día, sent_today se resetea. */
+  sent_today_date?: string;
+  /** Último timestamp ISO en que la cuenta envió un email — fuente de verdad
+   *  del gap entre envíos, persistente entre restarts. */
+  last_send_at?: string;
+  /** ISO en que la cuenta vuelve a estar disponible (gap random 6–9 min). */
+  next_eligible_at?: string;
 
   // ── SLOW RAMP (estilo Instantly) ──────────────────────────────────────
   // Si está activo, la cuenta empieza enviando `slow_ramp_start_limit` por día

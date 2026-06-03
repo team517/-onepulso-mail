@@ -142,6 +142,17 @@ export type Lead = {
   last_event?: string | null;        // "sent step 2", "opened", "replied"
   /** Razón por la que se completó/paró. */
   finished_reason?: string | null;
+
+  // ── Threading inter-paso ────────────────────────────────────────────
+  // Cuando se envía un step, guardamos su Message-ID + cadena References
+  // + subject base para que el siguiente step llegue como Re: en el mismo
+  // hilo (Instantly-style — los follow-ups van pegados al primer email).
+  /** Message-ID generado en el último envío (con `<...>`). */
+  last_message_id?: string | null;
+  /** Subject del primer envío — el resto irán como "Re: ${subject}". */
+  thread_subject?: string | null;
+  /** Cadena completa de References — se va alargando step a step. */
+  thread_references?: string[] | null;
 };
 
 /* ── Defaults ─────────────────────────────────────────────────────────── */
@@ -167,8 +178,9 @@ export function defaultOptions(): CampaignOptions {
     insert_unsubscribe_header: true,
     daily_limit_per_account: 30,
     max_new_leads_per_day: 100,
-    min_gap_minutes: 9,
-    random_gap_minutes: 5,
+    // 6–9 min reales entre envíos por cuenta (6 + random[0..3]).
+    min_gap_minutes: 6,
+    random_gap_minutes: 3,
     sticky_sender: true,
     account_rotation: "round-robin",
   };

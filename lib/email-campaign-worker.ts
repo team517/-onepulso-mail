@@ -1,29 +1,33 @@
 /**
- * Worker de envíos para campañas de email.
+ * Worker de envíos para campañas de email — pulido a nivel Instantly.
  *
- * Reglas (igual que Instantly + lo que pidió el usuario):
+ * Reglas:
  *   1. Solo procesa campañas con status="active".
- *   2. Solo usa cuentas asignadas a la campaña (campaign.account_ids).
- *   3. Por cada cuenta, hay un GAP RANDOM de 6–9 minutos entre envíos.
- *      Configurable vía options.min_gap_minutes / random_gap_minutes.
- *   4. Respeta el schedule: días de la semana + franja horaria + timezone.
- *   5. Respeta daily_limit_per_account (resetea cada día UTC).
- *   6. Sticky sender: si el lead ya tiene sticky_account_id, lo usa siempre.
- *      Si no, asigna uno por round-robin / random y lo fija.
- *   7. Variante elegida por hash determinista del lead (estabilidad A/B).
- *   8. Espera delay_days/delay_hours entre steps (calculado desde last_contacted_at).
- *   9. Si options.stop_on_reply o el lead tiene status "replied"/"bounced"/"unsubscribed",
- *      no envía.
- *
- * El worker corre en intervalos cortos (cada 30s) y decide qué/cuándo enviar.
- * Es deliberadamente conservador: si tiene duda, no envía. Mejor perder un
- * minuto que quemar una cuenta.
+ *   2. Solo usa cuentas asignadas a la campaña (por id O por tag).
+ *   3. Gap RANDOM 6–9 min entre envíos por cuenta — persistente entre restarts
+ *      (vive en EmailAccount.next_eligible_at + last_send_at, no en memoria).
+ *   4. Respeta schedule: días + horas + timezone (Europe/Madrid por defecto).
+ *   5. Respeta daily_limit_per_account; sent_today se resetea al cambiar de día
+ *      en la TZ del schedule de la campaña — NO en UTC.
+ *   6. Sticky sender. Si el sticky está borrado, fallback al pool.
+ *   7. Variante por hash determinista del lead.
+ *   8. Espera delay_days/delay_hours entre steps.
+ *   9. Para de enviar si lead.status ∈ {replied, bounced, unsubscribed, completed, paused}.
+ *  10. THREADING: step 2..N llegan como "Re: <subject>" con In-Reply-To +
+ *      References al Message-ID guardado del step anterior. Igual que Instantly.
+ *  11. APPEND a la carpeta Sent del IMAP para que el correo aparezca en el
+ *      mailbox externo (no solo en /bandejas).
+ *  12. Mutex: solo un tick corre a la vez. Si el anterior tarda >30s, el
+ *      siguiente se salta para no duplicar envíos.
+ *  13. Fallos de SMTP se loguean en /bandejas → Enviados (con ok:false +
+ *      error) además del log en memoria.
  */
 import nodemailer from "nodemailer";
+import { ImapFlow } from "imapflow";
 import {
   Campaign, Lead, Step, Variant,
   getCampaign, listCampaigns, listLeads, writeLeads,
-  pickAccount, pickVariant, renderTemplate, saveCampaign,
+  pickVariant, renderTemplate, saveCampaign,
 } from "./email-campaigns";
 import { EmailAccount, getEffectiveDailyLimit, listEmailAccounts, upsertEmailAccount, getEmailAccount } from "./email-accounts";
 import { syncAllInboxes } from "./email-inbox-sync";
@@ -32,28 +36,23 @@ import { listFollowUps, updateFollowUp } from "./email-followups";
 import { listMessagesForAccount } from "./email-inbox-store";
 import { sendThreadReply } from "./email-thread-send";
 import { logSentMessage } from "./email-sent-log";
-import { isBlocked, listBlocklist, type BlockEntry } from "./email-blocklist";
+import { isBlocked, listBlocklist } from "./email-blocklist";
 
-/** Estado en memoria del worker — historial de envíos por cuenta (para gaps). */
-type AccountState = {
-  /** ISO timestamp del último envío. */
+/** Estado en memoria del worker — espejo de lo que se persiste en EmailAccount. */
+type AccountRuntimeState = {
   last_send_at: string | null;
-  /** Cuenta de envíos del día (yyyy-mm-dd). */
   sent_today: number;
-  /** Día UTC en formato yyyy-mm-dd. */
-  today: string;
-  /** Próximo timestamp en el que la cuenta puede enviar (gap random aplicado). */
+  today: string;                // yyyy-mm-dd en la TZ de la campaña
   next_eligible_at: string | null;
-  /** Cursor round-robin (compartido por campaña). */
 };
 
 type WorkerState = {
   running: boolean;
   loops: number;
   last_loop_at: string | null;
-  /** Estado por cuenta. */
-  accounts: Map<string, AccountState>;
-  /** Cursor round-robin por campaña (campaignId → idx). */
+  /** Estado runtime por cuenta — se sincroniza con EmailAccount al inicio y tras cada send. */
+  accounts: Map<string, AccountRuntimeState>;
+  /** Cursor round-robin por campaña (in-memory; no crítico si se reinicia). */
   rrCursors: Map<string, number>;
   /** Log de últimos eventos para debug. */
   log: WorkerLogEntry[];
@@ -82,6 +81,9 @@ const STATE: WorkerState = {
   log: [],
 };
 
+/** Mutex: solo un tick corre a la vez. */
+let TICK_IN_FLIGHT = false;
+
 function log(entry: Omit<WorkerLogEntry, "at">) {
   STATE.log.push({ ...entry, at: new Date().toISOString() });
   if (STATE.log.length > 500) STATE.log.shift();
@@ -97,21 +99,41 @@ export function getWorkerStatus() {
   };
 }
 
+/** Devuelve "yyyy-mm-dd" en la timezone indicada (Europe/Madrid por defecto). */
+function dayInTz(date: Date, tz: string): string {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {  // en-CA → YYYY-MM-DD
+      timeZone: tz || "Europe/Madrid",
+      year: "numeric", month: "2-digit", day: "2-digit",
+    });
+    return fmt.format(date);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
 /** ¿Hoy y ahora caen dentro del schedule de la campaña? */
 function inSchedule(now: Date, schedule: Campaign["schedule"]): boolean {
   try {
-    // Hora local en el timezone del schedule
     const fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone: schedule.timezone || "UTC",
-      weekday: "short", hour: "2-digit", hour12: false,
+      timeZone: schedule.timezone || "Europe/Madrid",
+      weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
     });
     const parts = fmt.formatToParts(now);
     const wkMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-    const weekday = wkMap[parts.find((p) => p.type === "weekday")?.value || "Mon"];
-    const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "12");
+    const weekdayStr = parts.find((p) => p.type === "weekday")?.value;
+    if (!weekdayStr || !(weekdayStr in wkMap)) return false; // si falla TZ, NO enviar
+    const weekday = wkMap[weekdayStr];
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "-1");
+    const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0");
+    if (hour < 0) return false;
     if (!schedule.days.includes(weekday)) return false;
-    if (hour < schedule.start_hour) return false;
-    if (hour >= schedule.end_hour) return false;
+    // start_hour incluido, end_hour excluido (igual que Instantly).
+    const minutesNow = hour * 60 + minute;
+    const minStart = schedule.start_hour * 60;
+    const minEnd = schedule.end_hour * 60;
+    if (minutesNow < minStart) return false;
+    if (minutesNow >= minEnd) return false;
     return true;
   } catch {
     return false;
@@ -126,15 +148,28 @@ function nextSendTime(lead: Lead, step: Step): Date {
   return new Date(last.getTime() + ms);
 }
 
-function getAccountState(accountId: string): AccountState {
-  let s = STATE.accounts.get(accountId);
-  const today = new Date().toISOString().slice(0, 10);
+/**
+ * Lee el estado runtime de una cuenta — recuperando de disk (EmailAccount)
+ * si no está en memoria. Esto garantiza que tras un restart de Railway:
+ *   · No se reinician los gaps (cuenta sigue rate-limited hasta next_eligible_at)
+ *   · sent_today se preserva (no se vuelven a enviar 30 emails de golpe)
+ */
+function getAccountState(account: EmailAccount, tz: string): AccountRuntimeState {
+  const today = dayInTz(new Date(), tz);
+  let s = STATE.accounts.get(account.id);
   if (!s) {
-    s = { last_send_at: null, sent_today: 0, today, next_eligible_at: null };
-    STATE.accounts.set(accountId, s);
+    // Recover de disk
+    const savedDate = account.sent_today_date || today;
+    s = {
+      last_send_at: account.last_send_at || null,
+      sent_today: savedDate === today ? (account.sent_today ?? 0) : 0,
+      today,
+      next_eligible_at: account.next_eligible_at || null,
+    };
+    STATE.accounts.set(account.id, s);
   }
+  // Cambio de día → reset sent_today
   if (s.today !== today) {
-    // Cambio de día → reset contador
     s.today = today;
     s.sent_today = 0;
   }
@@ -143,15 +178,83 @@ function getAccountState(accountId: string): AccountState {
 
 function cleanPass(p: string) { return (p || "").replace(/\s+/g, ""); }
 
-/** Hace el envío real vía SMTP, devuelve {ok, error}. */
+/** Detecta y construye el path de la carpeta Sent (varios proveedores). */
+async function findSentFolder(client: ImapFlow): Promise<string | null> {
+  const list = (await client.list()) as any[];
+  for (const m of list) if (m.specialUse === "\\Sent") return m.path;
+  for (const m of list) {
+    if (/\b(Sent\s?Mail|Sent|Enviados|Gesendet|Verzonden|Inviata|Envoy[ée]s)\b/i.test(m.path)) return m.path;
+  }
+  if (list.some((m) => m.path?.startsWith("[Gmail]"))) return "[Gmail]/Sent Mail";
+  return null;
+}
+
+/** APPEND best-effort del MIME enviado al Sent del IMAP. */
+async function appendToSent(account: EmailAccount, mime: string): Promise<{ ok: boolean; folder?: string; error?: string }> {
+  const client = new ImapFlow({
+    host: account.imap_host,
+    port: account.imap_port,
+    secure: account.imap_secure,
+    auth: { user: account.imap_user || account.email, pass: cleanPass(account.imap_password) },
+    logger: false,
+    tls: { rejectUnauthorized: false },
+  });
+  try {
+    await Promise.race([
+      client.connect(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("IMAP connect timeout 10s")), 10000)),
+    ]);
+    const sent = await findSentFolder(client);
+    if (!sent) {
+      try { await client.logout(); } catch {}
+      return { ok: false, error: "Sent folder no detectada" };
+    }
+    try {
+      await client.append(sent, mime, ["\\Seen"]);
+      try { await client.logout(); } catch {}
+      return { ok: true, folder: sent };
+    } catch (e: any) {
+      try { await client.logout(); } catch {}
+      return { ok: false, folder: sent, error: e.message };
+    }
+  } catch (e: any) {
+    try { client.close(); } catch {}
+    return { ok: false, error: e.message };
+  }
+}
+
+function normalizeMsgId(id: string): string {
+  if (!id) return "";
+  return id.trim().startsWith("<") ? id.trim() : `<${id.trim()}>`;
+}
+
+function ensureRe(s: string): string {
+  if (!s) return "Re:";
+  if (/^re:\s*/i.test(s)) return s;
+  return `Re: ${s}`;
+}
+
+/** Envía un step de campaña, con threading inter-paso si toca. */
 async function sendOne(
-  account: EmailAccount, lead: Lead, variant: Variant, campaign: Campaign,
-): Promise<{ ok: boolean; error?: string; message_id?: string }> {
-  const subject = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
-  const html    = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
-  if (!subject.trim() || !html.trim()) {
+  account: EmailAccount, lead: Lead, variant: Variant, campaign: Campaign, stepIdx: number,
+): Promise<{ ok: boolean; error?: string; message_id?: string; thread_subject?: string; references?: string[]; appended?: boolean; sent_folder?: string }> {
+  const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
+  const bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
+  if (!subjectRaw.trim() || !bodyHtml.trim()) {
     return { ok: false, error: "Variante con subject o body vacío" };
   }
+
+  // ── Threading: step 0 abre hilo. Step 1+ → Re: + In-Reply-To + References
+  const isFirstStep = stepIdx === 0 || !lead.last_message_id;
+  const inReplyTo = isFirstStep ? "" : normalizeMsgId(lead.last_message_id || "");
+  const referencesArr = isFirstStep
+    ? []
+    : (lead.thread_references || []).concat(inReplyTo ? [inReplyTo] : []).filter(Boolean);
+  // Subject: en pasos posteriores reutilizamos el subject del primero (sin re-rendear
+  // por si tiene variables que han cambiado, mantenemos la coherencia del hilo).
+  const subjectOut = isFirstStep
+    ? subjectRaw
+    : ensureRe(lead.thread_subject || subjectRaw);
 
   const t = nodemailer.createTransport({
     host: account.smtp_host,
@@ -166,30 +269,72 @@ async function sendOne(
     || [account.first_name, account.last_name].filter(Boolean).join(" ")
     || account.email.split("@")[0];
 
+  // Message-ID propio para que coincida con el append y futuros pasos puedan
+  // referenciarlo.
+  const newMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${account.email.split("@")[1] || "onepulso.local"}>`;
+
   const headers: Record<string, string> = {
     "X-OnePulso-Campaign": campaign.id,
     "X-OnePulso-Lead": lead.id,
     "X-OnePulso-Variant": variant.id,
+    "X-OnePulso-Step": String(stepIdx + 1),
   };
   if (campaign.options.insert_unsubscribe_header) {
     headers["List-Unsubscribe"] = `<mailto:${account.email}?subject=Unsubscribe>`;
     headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
   }
 
+  const textBody = bodyHtml.replace(/<[^>]+>/g, "");
+  const useTextOnly = campaign.options.text_only_all || (campaign.options.text_only_first && isFirstStep);
+  const htmlOut = useTextOnly
+    ? undefined
+    : `<div style="font-family:-apple-system,sans-serif;font-size:14px;line-height:1.55;color:#0a0d14;white-space:pre-wrap">${bodyHtml.replace(/\n/g, "<br>")}</div>`;
+
   try {
     const info = await t.sendMail({
       from: `"${fromName}" <${account.email}>`,
       to: lead.email,
-      subject,
-      text: html.replace(/<[^>]+>/g, ""),
-      html: campaign.options.text_only_all || (campaign.options.text_only_first && lead.current_step === 0)
-        ? undefined
-        : `<div style="font-family:-apple-system,sans-serif;font-size:14px;line-height:1.55;color:#0a0d14;white-space:pre-wrap">${html.replace(/\n/g, "<br>")}</div>`,
+      subject: subjectOut,
+      text: textBody,
+      html: htmlOut,
       cc: campaign.options.cc || undefined,
       bcc: campaign.options.bcc || undefined,
       headers,
+      messageId: newMessageId,
+      inReplyTo: inReplyTo || undefined,
+      references: referencesArr.length > 0 ? referencesArr.join(" ") : undefined,
     });
-    return { ok: true, message_id: info.messageId };
+
+    // APPEND best-effort al Sent (igual que en sendThreadReply)
+    let appended = false;
+    let sentFolder: string | undefined;
+    try {
+      const mime = [
+        `From: "${fromName}" <${account.email}>`,
+        `To: ${lead.email}`,
+        `Subject: ${subjectOut}`,
+        `Message-ID: ${newMessageId}`,
+        inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
+        referencesArr.length > 0 ? `References: ${referencesArr.join(" ")}` : "",
+        `Date: ${new Date().toUTCString()}`,
+        `Content-Type: text/plain; charset=utf-8`,
+        ``,
+        textBody,
+        ``,
+      ].filter(Boolean).join("\r\n");
+      const r = await appendToSent(account, mime);
+      appended = r.ok;
+      sentFolder = r.folder;
+    } catch {}
+
+    return {
+      ok: true,
+      message_id: info.messageId || newMessageId,
+      thread_subject: isFirstStep ? subjectRaw : (lead.thread_subject || subjectRaw),
+      references: referencesArr.concat([info.messageId || newMessageId]),
+      appended,
+      sent_folder: sentFolder,
+    };
   } catch (e: any) {
     return { ok: false, error: `${e.code ? e.code + ": " : ""}${e.message}` };
   } finally {
@@ -207,6 +352,8 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
     return; // campaña sin contenido
   }
 
+  const tz = campaign.schedule.timezone || "Europe/Madrid";
+
   // Cuentas asignadas: por ID explícito O por tag. Las que tengan SMTP ok.
   const tagSet = new Set(campaign.account_tags || []);
   const idSet = new Set(campaign.account_ids || []);
@@ -216,7 +363,7 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
     if (tagSet.size > 0 && (a.tags || []).some((t) => tagSet.has(t))) return true;
     return false;
   });
-  if (assigned.length === 0) return; // sin cuentas asignadas (ni por id ni por tag)
+  if (assigned.length === 0) return;
 
   const leads = await listLeads(campaign.id);
   if (leads.length === 0) return;
@@ -224,12 +371,11 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   // Blocklist global — saltamos cualquier lead bloqueado.
   const blocklist = await listBlocklist();
 
-  // Leads candidatos: status enviable + es momento de su próximo step + no bloqueado
+  // Leads candidatos
   const candidates: { lead: Lead; step: Step; stepIdx: number; variant: Variant }[] = [];
   for (const lead of leads) {
     if (["bounced", "replied", "unsubscribed", "completed", "paused"].includes(lead.status)) continue;
     if (isBlocked(lead.email, blocklist)) {
-      // Marca el lead como unsubscribed para que ni siquiera lo intentemos
       lead.status = "unsubscribed";
       lead.finished_reason = "blocklist";
       continue;
@@ -242,70 +388,76 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
     candidates.push({ lead, step, stepIdx, variant });
   }
   if (candidates.length === 0) {
-    // Igualmente persiste el estado por si hemos marcado leads como unsubscribed por blocklist
     await writeLeads(campaign.id, leads);
     return;
   }
 
-  // Min/random gap configurables (default 6-9 min)
+  // Defaults pro-Instantly: 6–9 min gap, 30/día/cuenta.
   const minGap = campaign.options.min_gap_minutes ?? 6;
   const randomGap = campaign.options.random_gap_minutes ?? 3;
   const campaignDailyLimit = campaign.options.daily_limit_per_account ?? 30;
   const rotation = campaign.options.account_rotation;
 
-  /**
-   * Daily limit efectivo de la cuenta — toma el MENOR entre:
-   *   · slow ramp actual de la cuenta (si está activo)
-   *   · campaign.options.daily_limit_per_account (cap global de la campaña)
-   * Así una cuenta con slow ramp en día 1 envía 5 aunque la campaña permita 30,
-   * y una cuenta sin ramp envía 30 (o lo que diga la campaña, lo que sea menor).
-   */
   function getDailyLimitFor(account: EmailAccount): number {
     return Math.min(getEffectiveDailyLimit(account), campaignDailyLimit);
   }
 
-  /** ¿Está la cuenta lista para mandar AHORA? (no rate-limited + no full daily) */
+  /** Cuenta lista para mandar AHORA. */
   function accountReady(account: EmailAccount): boolean {
-    const s = getAccountState(account.id);
+    const s = getAccountState(account, tz);
     if (s.sent_today >= getDailyLimitFor(account)) return false;
     if (s.next_eligible_at && new Date(s.next_eligible_at) > now) return false;
     return true;
   }
 
-  // ── ASIGNACIÓN: Paso 1 — sticky · Paso 2 — round-robin / random
+  // ── ASIGNACIÓN: Paso 1 — sticky (con fallback si no existe) · Paso 2 — rotación
   type Pair = { account: EmailAccount; candidate: typeof candidates[number] };
   const planned: Pair[] = [];
   const usedAccounts = new Set<string>();
   const usedLeads = new Set<string>();
 
-  // PASO 1: cada cuenta sticky envía a SU lead pegajoso (preserva threading)
-  for (const account of assigned) {
-    if (usedAccounts.has(account.id)) continue;
-    if (!accountReady(account)) continue;
-    const target = candidates.find((c) =>
-      c.lead.sticky_account_id === account.id && !usedLeads.has(c.lead.id)
-    );
-    if (target) {
-      planned.push({ account, candidate: target });
-      usedAccounts.add(account.id);
-      usedLeads.add(target.lead.id);
+  // Mapa rápido para fallback de sticky
+  const assignedById = new Map(assigned.map((a) => [a.id, a]));
+
+  // PASO 1: sticky → su cuenta. Si la cuenta sticky NO está en assigned (fue
+  // borrada o desasignada), limpiamos el sticky para que entre al pool fresco.
+  for (const c of candidates) {
+    if (!c.lead.sticky_account_id) continue;
+    const stickyAccount = assignedById.get(c.lead.sticky_account_id);
+    if (!stickyAccount) {
+      // Sticky huérfano → resetear y dejar que el round-robin lo coja
+      c.lead.sticky_account_id = undefined;
+      continue;
     }
+    if (usedAccounts.has(stickyAccount.id) || usedLeads.has(c.lead.id)) continue;
+    if (!accountReady(stickyAccount)) continue; // espera al siguiente tick (preserva threading)
+    planned.push({ account: stickyAccount, candidate: c });
+    usedAccounts.add(stickyAccount.id);
+    usedLeads.add(c.lead.id);
   }
 
-  // PASO 2: leads sin sticky → rotación entre cuentas disponibles
+  // PASO 2: leads sin sticky → rotación
   const freshLeads = candidates.filter((c) => !c.lead.sticky_account_id && !usedLeads.has(c.lead.id));
   if (freshLeads.length > 0) {
     let pool: EmailAccount[];
     if (rotation === "random") {
-      // Shuffle Fisher-Yates → cuenta REAL aleatoria (no la primera del array)
       pool = assigned.filter((a) => !usedAccounts.has(a.id) && accountReady(a));
       for (let i = pool.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pool[i], pool[j]] = [pool[j], pool[i]];
       }
+    } else if (rotation === "weighted") {
+      // Weighted: prioriza cuentas con MÁS daily limit disponible. Cuentas con
+      // más cuota usan más rotación. Defensa: orden estable + ready-filter.
+      pool = assigned
+        .filter((a) => !usedAccounts.has(a.id) && accountReady(a))
+        .sort((a, b) => {
+          const aLeft = getDailyLimitFor(a) - getAccountState(a, tz).sent_today;
+          const bLeft = getDailyLimitFor(b) - getAccountState(b, tz).sent_today;
+          return bLeft - aLeft; // más cuota disponible primero
+        });
     } else {
-      // Round-robin: empieza desde cursor + SIN atascarse si la "siguiente"
-      // no está ready. Filtramos por ready ANTES de iterar.
+      // round-robin
       const cursor = STATE.rrCursors.get(campaign.id) ?? 0;
       const startIdx = cursor % assigned.length;
       pool = assigned.slice(startIdx).concat(assigned.slice(0, startIdx))
@@ -321,8 +473,7 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
       usedLeads.add(target.lead.id);
     }
 
-    // Avanza el cursor por el número de leads frescos consumidos en este tick
-    if (rotation !== "random") {
+    if (rotation === "round-robin") {
       const cursor = STATE.rrCursors.get(campaign.id) ?? 0;
       const advanced = planned.filter((p) => !p.candidate.lead.sticky_account_id).length;
       if (advanced > 0) {
@@ -331,17 +482,95 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
     }
   }
 
-  // ── EJECUCIÓN: enviamos cada pair
+  // ── EJECUCIÓN
   for (const { account, candidate: target } of planned) {
-    // Defensa: revisar de nuevo accountReady por si en paralelo cambió
     if (!accountReady(account)) continue;
 
-    const accState = getAccountState(account.id);
-    const sendResult = await sendOne(account, target.lead, target.variant, campaign);
+    const accState = getAccountState(account, tz);
+    const sendResult = await sendOne(account, target.lead, target.variant, campaign, target.stepIdx);
     const nowIso = new Date().toISOString();
 
     if (sendResult.ok) {
-      // Registro en el log de enviados (campaign step real)
+      const renderedSubject = renderTemplate(target.variant.subject || "(sin asunto)", target.lead.variables, { seed: target.lead.id });
+      const renderedBody = renderTemplate(target.variant.body || "", target.lead.variables, { seed: target.lead.id });
+
+      await logSentMessage({
+        type: "campaign",
+        account_id: account.id,
+        account_email: account.email,
+        to_address: target.lead.email,
+        subject: target.stepIdx === 0 ? renderedSubject : ensureRe(target.lead.thread_subject || renderedSubject),
+        body: renderedBody,
+        message_id: sendResult.message_id,
+        in_reply_to: target.stepIdx > 0 ? (target.lead.last_message_id || undefined) : undefined,
+        references: target.stepIdx > 0 ? target.lead.thread_references || undefined : undefined,
+        campaign_id: campaign.id,
+        campaign_step: target.stepIdx + 1,
+        campaign_variant: target.variant.label,
+        lead_id: target.lead.id,
+        lead_email: target.lead.email,
+        ok: true,
+        appended_to_sent: sendResult.appended,
+        sent_folder: sendResult.sent_folder,
+      });
+
+      // Actualizar lead
+      const leadIdx = leads.findIndex((l) => l.id === target.lead.id);
+      if (leadIdx >= 0) {
+        const isFinalStep = target.stepIdx + 1 >= campaign.steps.length;
+        leads[leadIdx] = {
+          ...target.lead,
+          status: isFinalStep ? "completed" : "active",
+          current_step: target.stepIdx + 1,
+          last_contacted_at: nowIso,
+          last_event: `sent step ${target.stepIdx + 1} variant ${target.variant.label}`,
+          sticky_account_id: target.lead.sticky_account_id || account.id,
+          finished_reason: isFinalStep ? "completed_sequence" : null,
+          // Threading: el primer envío FIJA el subject del hilo; los siguientes
+          // alargan References con su propio Message-ID.
+          thread_subject: target.lead.thread_subject || renderedSubject,
+          last_message_id: sendResult.message_id || null,
+          thread_references: sendResult.references || target.lead.thread_references || null,
+        };
+      }
+
+      // Métricas
+      campaign.metrics = campaign.metrics || {
+        total_leads: 0, active_leads: 0, contacted: 0, opened: 0, clicked: 0,
+        replied: 0, bounced: 0, unsubscribed: 0, completed: 0,
+      };
+      campaign.metrics.contacted = (campaign.metrics.contacted || 0) + 1;
+      if (leads.find((l) => l.id === target.lead.id)?.status === "completed") {
+        campaign.metrics.completed = (campaign.metrics.completed || 0) + 1;
+      }
+
+      // ── Estado de la cuenta — PERSISTIDO en EmailAccount (sobrevive a restart)
+      accState.sent_today += 1;
+      accState.last_send_at = nowIso;
+      const gapMinutes = minGap + Math.random() * randomGap;
+      accState.next_eligible_at = new Date(now.getTime() + gapMinutes * 60_000).toISOString();
+
+      // Espejo a disk
+      const fresh = await getEmailAccount(account.id);
+      if (fresh) {
+        await upsertEmailAccount({
+          ...fresh,
+          sent_today: accState.sent_today,
+          sent_today_date: accState.today,
+          last_send_at: accState.last_send_at,
+          next_eligible_at: accState.next_eligible_at,
+        });
+      }
+
+      log({
+        level: "send", message: `Email enviado · gap ${gapMinutes.toFixed(1)}m`,
+        campaign_id: campaign.id, campaign_name: campaign.name,
+        lead_id: target.lead.id, lead_email: target.lead.email,
+        account_id: account.id, account_email: account.email,
+        step: target.stepIdx + 1, variant: target.variant.label,
+      });
+    } else {
+      // FALLO — siempre se loguea en /bandejas → Enviados (visibilidad para el usuario)
       const renderedSubject = renderTemplate(target.variant.subject || "(sin asunto)", target.lead.variables, { seed: target.lead.id });
       const renderedBody = renderTemplate(target.variant.body || "", target.lead.variables, { seed: target.lead.id });
       await logSentMessage({
@@ -351,70 +580,18 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
         to_address: target.lead.email,
         subject: renderedSubject,
         body: renderedBody,
-        message_id: sendResult.message_id,
         campaign_id: campaign.id,
         campaign_step: target.stepIdx + 1,
         campaign_variant: target.variant.label,
         lead_id: target.lead.id,
         lead_email: target.lead.email,
-        ok: true,
+        ok: false,
+        error: sendResult.error,
       });
 
-      // Marca el lead como contactado, avanza step, fija sticky
-      const leadIdx = leads.findIndex((l) => l.id === target!.lead.id);
-      if (leadIdx >= 0) {
-        leads[leadIdx] = {
-          ...target.lead,
-          status: "active",
-          current_step: target.stepIdx + 1,
-          last_contacted_at: nowIso,
-          last_event: `sent step ${target.stepIdx + 1} variant ${target.variant.label}`,
-          sticky_account_id: target.lead.sticky_account_id || account.id,
-          finished_reason: target.stepIdx + 1 >= campaign.steps.length ? "completed_sequence" : null,
-        };
-        if (target.stepIdx + 1 >= campaign.steps.length) {
-          leads[leadIdx].status = "completed";
-        }
-      }
-
-      // Métricas + sent_today
-      campaign.metrics = campaign.metrics || {
-        total_leads: 0, active_leads: 0, contacted: 0, opened: 0, clicked: 0,
-        replied: 0, bounced: 0, unsubscribed: 0, completed: 0,
-      };
-      campaign.metrics.contacted = (campaign.metrics.contacted || 0) + 1;
-      if (leads.find((l) => l.id === target!.lead.id)?.status === "completed") {
-        campaign.metrics.completed = (campaign.metrics.completed || 0) + 1;
-      }
-
-      // Cuenta: sent_today + estado
-      accState.sent_today += 1;
-      accState.last_send_at = nowIso;
-
-      // Próximo envío: 6-9 min random (min + 0..random)
-      const gapMinutes = minGap + Math.random() * randomGap;
-      accState.next_eligible_at = new Date(now.getTime() + gapMinutes * 60_000).toISOString();
-
-      // Persistimos: cuenta (sent_today en EmailAccount), campaign + leads
-      const acctFresh = await listEmailAccounts();
-      const idx = acctFresh.findIndex((a) => a.id === account.id);
-      if (idx >= 0) {
-        acctFresh[idx].sent_today = accState.sent_today;
-        await upsertEmailAccount(acctFresh[idx]);
-      }
-
-      log({
-        level: "send", message: "Email enviado",
-        campaign_id: campaign.id, campaign_name: campaign.name,
-        lead_id: target.lead.id, lead_email: target.lead.email,
-        account_id: account.id, account_email: account.email,
-        step: target.stepIdx + 1, variant: target.variant.label,
-      });
-    } else {
-      // Falla SMTP. Si es bounce permanente (5.x), marca lead como bounced.
-      const permanent = /5\.[157]\.\d|EAUTH|EENVELOPE/i.test(sendResult.error || "");
+      const permanent = /5\.[157]\.\d|EAUTH|EENVELOPE|550|551|553/i.test(sendResult.error || "");
       if (permanent) {
-        const leadIdx = leads.findIndex((l) => l.id === target!.lead.id);
+        const leadIdx = leads.findIndex((l) => l.id === target.lead.id);
         if (leadIdx >= 0) {
           leads[leadIdx].status = "bounced";
           leads[leadIdx].last_event = `bounce: ${sendResult.error}`;
@@ -432,12 +609,16 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
         lead_id: target.lead.id, lead_email: target.lead.email,
         account_id: account.id, account_email: account.email,
       });
-      // Aún así aplicamos un gap más corto para no martillar
+      // Gap más corto tras fallo para no martillar
       accState.next_eligible_at = new Date(now.getTime() + 2 * 60_000).toISOString();
+      const fresh = await getEmailAccount(account.id);
+      if (fresh) {
+        await upsertEmailAccount({ ...fresh, next_eligible_at: accState.next_eligible_at });
+      }
     }
   }
 
-  // Persiste leads y campaign al final (1 escritura por campaña por loop)
+  // Persistencia final por campaña
   await writeLeads(campaign.id, leads);
   campaign.metrics = campaign.metrics || {
     total_leads: 0, active_leads: 0, contacted: 0, opened: 0, clicked: 0,
@@ -448,22 +629,31 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   await saveCampaign(campaign);
 }
 
-/** Una iteración del worker — itera todos los workspaces y procesa cada uno aislado. */
+/** Una iteración del worker — con mutex global. */
 export async function tickWorker() {
+  if (TICK_IN_FLIGHT) {
+    log({ level: "warn", message: "Tick saltado (anterior aún en curso)" });
+    return;
+  }
+  TICK_IN_FLIGHT = true;
   STATE.last_loop_at = new Date().toISOString();
   STATE.loops += 1;
-  const { listAllWorkspaces, withWorkspace } = await import("./workspace");
-  const workspaces = await listAllWorkspaces();
-  for (const ws of workspaces) {
-    try {
-      await withWorkspace(ws, () => tickWorkspace());
-    } catch (e: any) {
-      log({ level: "error", message: `Tick workspace ${ws} error: ${e.message}` });
+  try {
+    const { listAllWorkspaces, withWorkspace } = await import("./workspace");
+    const workspaces = await listAllWorkspaces();
+    for (const ws of workspaces) {
+      try {
+        await withWorkspace(ws, () => tickWorkspace());
+      } catch (e: any) {
+        log({ level: "error", message: `Tick workspace ${ws} error: ${e.message}` });
+      }
     }
+  } finally {
+    TICK_IN_FLIGHT = false;
   }
 }
 
-/** Procesa un único workspace (cuentas + campañas + follow-ups + sync). */
+/** Procesa un único workspace. */
 async function tickWorkspace() {
   try {
     const accounts = await listEmailAccounts();
@@ -471,7 +661,6 @@ async function tickWorkspace() {
     const active = campaigns.filter((c) => c.status === "active");
 
     for (const c of active) {
-      // Cargar campaña fresca de disk (puede haber cambios)
       const fresh = await getCampaign(c.id);
       if (!fresh || fresh.status !== "active") continue;
       try {
@@ -481,20 +670,15 @@ async function tickWorkspace() {
       }
     }
 
-    // Sync IMAP cada 4 loops (≈ 2 min con intervalo de 30s) — el usuario pidió 2 min
+    // Sync IMAP cada 4 loops (≈ 2 min)
     if (STATE.loops % 4 === 0 || STATE.loops === 1) {
       try {
         const inboxResults = await syncAllInboxes(accounts, 3);
         const totalNew = inboxResults.reduce((s, r) => s + r.new_count, 0);
         const totalFiltered = inboxResults.reduce((s, r) => s + r.warmup_filtered + r.bounce_filtered, 0);
         if (totalNew > 0 || totalFiltered > 0) {
-          log({
-            level: "info",
-            message: `Sync IMAP: +${totalNew} nuevos, ${totalFiltered} filtrados (warmup/bounce)`,
-          });
+          log({ level: "info", message: `Sync IMAP: +${totalNew} nuevos, ${totalFiltered} filtrados` });
         }
-        // Detectar respuestas: si alguno de los nuevos mensajes viene de un lead,
-        // marca el lead como replied → el worker deja de enviarle.
         if (totalNew > 0) {
           const det = await detectRepliesForAccounts(accounts.map((a) => a.id));
           if (det.detections.length > 0) {
@@ -507,13 +691,26 @@ async function tickWorkspace() {
               });
             }
           }
+          // Detectar bounces NDR (mailer-daemon) — marca leads bounced
+          try {
+            const bouncesDetected = await detectBouncesFromInbox(accounts.map((a) => a.id));
+            for (const b of bouncesDetected) {
+              log({
+                level: "warn",
+                message: `📬 Bounce NDR detectado: ${b.lead_email} (${b.reason})`,
+                campaign_id: b.campaign_id, campaign_name: b.campaign_name,
+                lead_email: b.lead_email,
+              });
+            }
+          } catch (e: any) {
+            log({ level: "warn", message: `Detección de bounces falló: ${e.message}` });
+          }
         }
       } catch (e: any) {
         log({ level: "warn", message: `Sync IMAP falló: ${e.message}` });
       }
     }
 
-    // Procesa follow-ups programados (cada tick)
     try {
       await processFollowUps();
     } catch (e: any) {
@@ -524,13 +721,49 @@ async function tickWorkspace() {
   }
 }
 
-/**
- * Procesa follow-ups pendientes:
- *   - Si `only_if_no_reply`, comprueba que no haya mensajes nuevos en el thread
- *     desde que se creó el follow-up. Si los hay → cancela como "got_reply".
- *   - Si scheduled_for ya pasó → envía vía sendThreadReply.
- *   - Marca como sent (con message_id) o failed (con last_error).
- */
+/** Detecta NDR (mailer-daemon, delivery failure) en la bandeja y marca leads bounced. */
+async function detectBouncesFromInbox(accountIds: string[]): Promise<Array<{ lead_email: string; campaign_id: string; campaign_name: string; reason: string }>> {
+  const out: Array<{ lead_email: string; campaign_id: string; campaign_name: string; reason: string }> = [];
+  const campaigns = await listCampaigns();
+  // Indexa leads activos por email
+  type LeadRef = { campaignId: string; campaignName: string; leadId: string; leadEmail: string };
+  const leadIndex = new Map<string, LeadRef>();
+  for (const c of campaigns) {
+    const leads = await listLeads(c.id);
+    for (const l of leads) {
+      if (["bounced", "unsubscribed", "completed"].includes(l.status)) continue;
+      leadIndex.set(l.email.toLowerCase(), { campaignId: c.id, campaignName: c.name, leadId: l.id, leadEmail: l.email });
+    }
+  }
+  if (leadIndex.size === 0) return out;
+
+  // Heurística: subject empieza por "Mail Delivery", "Undelivered", etc; body contiene email del lead.
+  const NDR_SUBJ = /(mail\s*delivery|undeliverable|delivery\s*status|failure\s*notice|returned\s*mail|undelivered)/i;
+  for (const accId of accountIds) {
+    const msgs = await listMessagesForAccount(accId);
+    for (const m of msgs) {
+      if (!NDR_SUBJ.test(m.subject || "") && !/mailer-daemon|postmaster/i.test(m.from_address || "")) continue;
+      const text = `${m.subject || ""} ${m.preview || ""} ${m.text || ""}`.toLowerCase();
+      for (const [email, ref] of leadIndex.entries()) {
+        if (!text.includes(email)) continue;
+        // Marca como bounced
+        const leads = await listLeads(ref.campaignId);
+        const lidx = leads.findIndex((l) => l.id === ref.leadId);
+        if (lidx >= 0 && leads[lidx].status !== "bounced") {
+          leads[lidx].status = "bounced";
+          leads[lidx].last_event = `NDR bounce detectado`;
+          leads[lidx].finished_reason = "NDR";
+          await writeLeads(ref.campaignId, leads);
+          out.push({ lead_email: ref.leadEmail, campaign_id: ref.campaignId, campaign_name: ref.campaignName, reason: "NDR" });
+        }
+        leadIndex.delete(email);
+      }
+    }
+  }
+  return out;
+}
+
+/** Procesa follow-ups pendientes. */
 async function processFollowUps() {
   const all = await listFollowUps();
   const pending = all.filter((f) => f.status === "pending");
@@ -539,9 +772,8 @@ async function processFollowUps() {
 
   for (const fu of pending) {
     const dueAt = new Date(fu.scheduled_for);
-    if (dueAt > now) continue; // todavía no toca
+    if (dueAt > now) continue;
 
-    // Check: ¿llegó respuesta en el thread desde que se creó?
     if (fu.only_if_no_reply) {
       try {
         const accountMsgs = await listMessagesForAccount(fu.account_id);
@@ -565,14 +797,11 @@ async function processFollowUps() {
           continue;
         }
       } catch (e: any) {
-        // Si falla la comprobación, NO enviamos — preferimos perder el follow-up
-        // a mandar uno duplicado.
         log({ level: "warn", message: `No pudimos verificar respuestas para FU ${fu.id}: ${e.message}` });
         continue;
       }
     }
 
-    // Envío
     const account = await getEmailAccount(fu.account_id);
     if (!account) {
       await updateFollowUp(fu.id, { status: "failed", last_error: "Cuenta no encontrada" });
@@ -642,14 +871,13 @@ async function processFollowUps() {
   }
 }
 
-/** Loop continuo del worker — arranca con startWorker(). */
+/** Loop continuo del worker. */
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 
 export function startWorker(intervalSeconds = 30) {
   if (STATE.running) return;
   STATE.running = true;
   log({ level: "info", message: `Worker iniciado · intervalo ${intervalSeconds}s` });
-  // Ejecuta una vez al arrancar, después en intervalos
   tickWorker().catch(() => {});
   intervalHandle = setInterval(() => { tickWorker().catch(() => {}); }, intervalSeconds * 1000);
 }
