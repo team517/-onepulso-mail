@@ -2096,6 +2096,22 @@ function CsvUploadModal({ campaignId, campaign, onClose, onDone, toast }: {
             }}
           />
 
+          {/* Email verifier — opcional, descarta inválidos automáticamente */}
+          <EmailVerifier
+            emails={parsed.rows.filter((r) => !r.__error).map((r) => r.email)}
+            onInvalidsDetected={(invalidEmails) => {
+              // Auto-deselecciona los inválidos para que no se importen.
+              const invalidSet = new Set(invalidEmails.map((e) => e.toLowerCase()));
+              setSelectedLines((prev) => {
+                const next = new Set(prev);
+                for (const r of parsed.rows) {
+                  if (invalidSet.has(r.email.toLowerCase())) next.delete(r.line);
+                }
+                return next;
+              });
+            }}
+          />
+
           {/* Row controls */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12.5, color: INK_3 }}>
@@ -2228,6 +2244,176 @@ const pageBtn: React.CSSProperties = {
  * Estilo Instantly: checkboxes con scope (esta campaña / otras / blocklist)
  * + panel con resumen + botón "Quitar duplicados de la selección".
  */
+/**
+ * Verifica emails con la API interna (DNS MX + disposable + role + syntax).
+ * Tras la verificación, auto-deselecciona los inválidos para que no se importen.
+ * El usuario puede ver el detalle de cada veredicto en un panel expandible.
+ */
+function EmailVerifier({ emails, onInvalidsDetected }: {
+  emails: string[];
+  onInvalidsDetected: (invalidEmails: string[]) => void;
+}) {
+  const [results, setResults] = useState<any[] | null>(null);
+  const [summary, setSummary] = useState<any>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  async function verify() {
+    if (emails.length === 0) return;
+    setVerifying(true);
+    setResults(null); setSummary(null);
+    setProgress({ done: 0, total: emails.length });
+
+    const VERIFY_CHUNK = 200;  // máx 500 por el endpoint, vamos a 200 para mejor UX
+    const all: any[] = [];
+    const agg = { total: 0, valid: 0, invalid: 0, risky: 0, unknown: 0 };
+
+    try {
+      for (let i = 0; i < emails.length; i += VERIFY_CHUNK) {
+        const chunk = emails.slice(i, i + VERIFY_CHUNK);
+        try {
+          const r = await fetch("/api/email-verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ emails: chunk }),
+          });
+          const j = await r.json();
+          if (j.ok && Array.isArray(j.results)) {
+            all.push(...j.results);
+            agg.total += j.summary.total;
+            agg.valid += j.summary.valid;
+            agg.invalid += j.summary.invalid;
+            agg.risky += j.summary.risky;
+            agg.unknown += j.summary.unknown;
+          }
+        } catch {}
+        setProgress({ done: Math.min(i + VERIFY_CHUNK, emails.length), total: emails.length });
+      }
+
+      setResults(all);
+      setSummary(agg);
+
+      // Auto-borra los inválidos del selection
+      const invalids = all.filter((r) => r.verdict === "invalid").map((r) => r.email);
+      if (invalids.length > 0) {
+        onInvalidsDetected(invalids);
+      }
+    } finally {
+      setVerifying(false);
+      setProgress(null);
+    }
+  }
+
+  return (
+    <div style={{
+      padding: "12px 14px", marginBottom: 14,
+      background: SURF, border: `1px solid ${LINE}`, borderRadius: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: 9,
+          background: results ? "rgba(31,138,91,0.10)" : "rgba(154,105,245,0.10)",
+          color: results ? GREEN : PURPLE_DEEP,
+          display: "grid", placeItems: "center",
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontFamily: FONT_SANS, fontWeight: 700, fontSize: 14, color: INK }}>
+            Verificar emails
+          </div>
+          <div style={{ fontSize: 12, color: INK_4, marginTop: 2 }}>
+            {results
+              ? `${summary.valid} válidos · ${summary.invalid} inválidos (auto-borrados) · ${summary.risky} riesgosos · ${summary.unknown} sin determinar`
+              : "Comprueba sintaxis, DNS MX, dominios temporales y direcciones genéricas antes de importar."
+            }
+          </div>
+        </div>
+        {!results && (
+          <button onClick={verify} disabled={verifying || emails.length === 0} style={{
+            ...ghostBtn, height: 36, fontSize: 13,
+            opacity: verifying || emails.length === 0 ? 0.55 : 1,
+          }}>
+            {verifying
+              ? `Verificando ${progress?.done ?? 0}/${progress?.total ?? emails.length}…`
+              : `Verificar ${emails.length} email${emails.length === 1 ? "" : "s"}`}
+          </button>
+        )}
+        {results && (
+          <button onClick={() => setExpanded((v) => !v)} style={{ ...ghostBtn, height: 36, fontSize: 13 }}>
+            {expanded ? "Ocultar detalle" : "Ver detalle"}
+          </button>
+        )}
+      </div>
+
+      {progress && verifying && (
+        <div style={{ marginTop: 10, height: 4, background: PAPER, borderRadius: 999, overflow: "hidden" }}>
+          <div style={{
+            width: `${(progress.done / Math.max(progress.total, 1)) * 100}%`,
+            height: "100%", background: BRAND_G, transition: "width .2s",
+          }} />
+        </div>
+      )}
+
+      {results && summary && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <VerifyStat label="Válidos" value={summary.valid} color={GREEN} />
+          <VerifyStat label="Inválidos" value={summary.invalid} color={DANGER} />
+          <VerifyStat label="Riesgosos" value={summary.risky} color={ORANGE} />
+          <VerifyStat label="Sin determinar" value={summary.unknown} color={INK_4} />
+        </div>
+      )}
+
+      {expanded && results && (
+        <div style={{
+          marginTop: 12, maxHeight: 280, overflowY: "auto",
+          background: PAPER, border: `1px solid ${LINE}`, borderRadius: 8,
+        }}>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead style={{ background: SURF, position: "sticky", top: 0 }}>
+              <tr>
+                <th style={{ ...th, padding: "8px 12px", fontSize: 11 }}>Email</th>
+                <th style={{ ...th, padding: "8px 12px", fontSize: 11 }}>Veredicto</th>
+                <th style={{ ...th, padding: "8px 12px", fontSize: 11 }}>Motivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.filter((r) => r.verdict !== "valid").map((r, i) => {
+                const c = r.verdict === "invalid" ? DANGER : r.verdict === "risky" ? ORANGE : INK_4;
+                return (
+                  <tr key={i} style={{ borderTop: `1px solid ${LINE}` }}>
+                    <td style={{ padding: "6px 12px", color: INK_2, fontFamily: FONT_MONO, fontSize: 11.5 }}>{r.email}</td>
+                    <td style={{ padding: "6px 12px", color: c, fontWeight: 700, textTransform: "uppercase", fontSize: 11 }}>{r.verdict}</td>
+                    <td style={{ padding: "6px 12px", color: INK_3, fontSize: 11.5 }}>{r.reasons.join(" · ") || "—"}</td>
+                  </tr>
+                );
+              })}
+              {results.filter((r) => r.verdict !== "valid").length === 0 && (
+                <tr><td colSpan={3} style={{ padding: "12px", textAlign: "center", color: INK_4 }}>Todos los emails son válidos ✓</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VerifyStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div style={{
+      padding: "6px 12px", background: PAPER, border: `1px solid ${LINE}`, borderRadius: 8,
+      display: "inline-flex", alignItems: "baseline", gap: 6,
+    }}>
+      <span style={{ fontFamily: FONT_MONO, fontWeight: 800, color, fontSize: 14 }}>{value}</span>
+      <span style={{ fontSize: 11.5, color: INK_3 }}>{label}</span>
+    </div>
+  );
+}
+
 function DuplicateChecker({ campaignId, emails, onDeselectDuplicates }: {
   campaignId: string;
   emails: string[];
