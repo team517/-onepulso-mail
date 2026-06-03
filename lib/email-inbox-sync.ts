@@ -92,7 +92,7 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
           // marcamos con flag. El API oculta los warmup/bounce por defecto pero
           // el usuario puede ver "Mostrar warmup" / "Mostrar bounces" si sospecha
           // de un falso positivo (un email legítimo mal clasificado).
-          const warmup = isWarmupMessage({ subject, text, html, from: fromAddress });
+          const warmup = isWarmupMessage({ subject, text, html, from: fromAddress, fromName });
           const bounce = isBounceOrFailure({ from: fromAddress, fromAddress, fromName, subject, text });
           if (warmup) result.warmup_filtered++;
           if (bounce) result.bounce_filtered++;

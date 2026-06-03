@@ -1,89 +1,135 @@
 /**
- * Detección conservadora de mensajes warmup / tracking-injected
- * (Mailwarm, Lemwarm, Smartlead, Instantly, MailReach, Folderly...).
+ * Detección de mensajes warmup / tracking-injected (Mailwarm, Lemwarm,
+ * Smartlead, Instantly, MailReach, Folderly, Warmbox, etc.).
  *
- * Filosofía: prefiero un falso negativo (un warmup que se cuela) que un
- * falso positivo (un email legítimo descartado). Por eso requiere
- * **múltiples señales** para marcar como warmup, salvo:
- *   - firma explícita del servicio en el body (lemwarm, mailreach, etc.)
- *   - footer típico `<p>code</p>` con código alfanumérico aislado
+ * Estrategia: agresiva por defecto — cualquiera de estas señales marca
+ * como warmup:
+ *   - Firma explícita del servicio en el body (lemwarm, mailreach, etc.)
+ *   - Código alfanumérico 6-20 chars en subject (típico hash random)
+ *   - Cadena hifenada larga en subject ("ought-care-sing")
+ *   - Footer <p>código</p> aislado al final del HTML
+ *   - From con nombre típico de warmup (Kim, Mark, Jenny, Sarah, etc.)
+ *     SOLO si no tiene apellido y viene de dominio genérico
  *
- * Casos clásicos que SÍ debe cazar:
- *   "Oliver, let's chat! | 7Y8KN0M CHBV6J7"
- *   "average donation amounts | ought-care-sing CHBV6J7"
- *   bodies con "<p>ought-care-sing CHBV6J7</p>"
- *   "Powered by lemwarm" en footer
- *
- * Casos que NO debe cazar (falsos positivos a evitar):
- *   "Apple-Pay-Confirmation - your receipt"
- *   "Visita-guiada-Bilbao 2025"
- *   "Re: tu-propuesta-comercial"
+ * Como los mensajes filtrados se GUARDAN (con flag is_warmup), un falso
+ * positivo no se pierde — el usuario puede verlo en la tab "Warmup".
  */
+
+/** Top-200 nombres típicos de warmup (English first names sin apellido). */
+const WARMUP_FIRST_NAMES = new Set([
+  // Top English first names que servicios warmup usan
+  "kim", "mark", "jenny", "sarah", "tom", "john", "mike", "lisa",
+  "david", "amy", "chris", "anna", "paul", "emma", "james", "kate",
+  "rob", "robert", "ben", "alex", "rachel", "ryan", "alice", "sam",
+  "sammy", "dan", "daniel", "matt", "matthew", "luke", "ethan", "max",
+  "lucy", "olivia", "sophie", "sophia", "isabella", "emily", "grace",
+  "natalie", "claire", "rebecca", "linda", "mary", "patricia", "jennifer",
+  "elizabeth", "barbara", "susan", "jessica", "karen", "nancy", "betty",
+  "helen", "sandra", "donna", "carol", "ruth", "sharon", "michelle",
+  "laura", "amanda", "melissa", "deborah", "stephanie", "dorothy",
+  "rebecca", "virginia", "kathleen", "pamela", "martha", "debra",
+  "amber", "andrea", "anne", "ashley", "ava", "becky", "brenda", "brian",
+  "carolyn", "catherine", "cheryl", "christina", "christopher", "cindy",
+  "courtney", "crystal", "cynthia", "denise", "diana", "diane", "doris",
+  "edward", "eric", "frank", "gary", "george", "gloria", "harold",
+  "heather", "henry", "irene", "jack", "jacob", "janet", "janice",
+  "jason", "jean", "jeffrey", "jerry", "jessie", "joan", "joe", "jose",
+  "joseph", "joshua", "joyce", "judith", "julia", "julie", "justin",
+  "katherine", "kayla", "keith", "kelly", "kenneth", "kevin", "kim",
+  "kimberly", "larry", "lawrence", "leah", "leslie", "lori", "louis",
+  "madison", "marie", "marilyn", "marjorie", "marvin", "megan",
+  "michael", "michelle", "nathan", "nicholas", "nicole", "norma",
+  "patrick", "peggy", "peter", "philip", "phyllis", "rachel", "ralph",
+  "randy", "raymond", "richard", "ronald", "rose", "roy", "russell",
+  "ruth", "samantha", "samuel", "sara", "scott", "sean", "shirley",
+  "stephen", "steven", "teresa", "terri", "terry", "theresa", "thomas",
+  "tiffany", "timothy", "todd", "tracy", "wanda", "wayne", "william",
+]);
+
+function looksLikeWarmupSender(fromName?: string, fromEmail?: string): boolean {
+  if (!fromName) return false;
+  const name = fromName.trim().toLowerCase();
+  // Solo nombre, sin apellido (1 token, ≤ 12 chars).
+  const tokens = name.split(/\s+/).filter(Boolean);
+  if (tokens.length !== 1) return false;
+  const first = tokens[0].replace(/[^a-z]/g, "");
+  if (first.length < 2 || first.length > 12) return false;
+  if (!WARMUP_FIRST_NAMES.has(first)) return false;
+  // Si el dominio del email coincide con uno de los tuyos legítimos
+  // (custom domain), probablemente no es warmup. Pero si es un dominio
+  // genérico-looking (random tldraw, números, etc.) → muy probable warmup.
+  if (fromEmail) {
+    const dom = fromEmail.split("@")[1]?.toLowerCase() || "";
+    // Dominios con random + tld extraña → typical warmup
+    if (/^[a-z0-9]{8,}\.[a-z]{2,6}$/.test(dom)) return true;
+    if (/[0-9]/.test(dom.split(".")[0] || "")) return true; // dominio con digits
+  }
+  return true; // single-name match → marca
+}
+
 export function isWarmupMessage(input: {
   subject?: string;
   text?: string;
   html?: string;
   from?: string;
+  fromName?: string;
 }): boolean {
   const s = (input.subject || "").trim();
   const bodyText = ((input.text || "") + " " + (input.html || "").replace(/<[^>]+>/g, " ")).slice(0, 10000);
   const html = input.html || "";
 
-  /* ── Señal 1: firma explícita de servicio warmup en el body ──
-     Esto es definitivo — ningún email legítimo menciona estos servicios. */
-  if (/\b(lemwarm|mailwarm|warmup\s*inbox|warmupinbox|smartlead\.ai|instantly\.ai|mailreach|folderly|warmbox|warmup\.app)\b/i.test(bodyText)) {
+  /* ── Señal A: firma explícita de servicio warmup en el body ─────────
+     Definitivo — ningún email legítimo menciona estos servicios. */
+  if (/\b(lemwarm|mailwarm|warmup\s*inbox|warmupinbox|smartlead\.ai|instantly\.ai|mailreach|folderly|warmbox|warmup\.app|inboxally|warmy)\b/i.test(bodyText)) {
     return true;
   }
 
-  /* ── Señal 2: footer <p>código</p> aislado al final del HTML ──
-     Patrón muy específico, baja probabilidad de falso positivo. */
-  if (/<p[^>]*>\s*[a-z]+(?:-[a-z]+){2,}\s+[A-Za-z0-9]{6,16}\s*<\/p>\s*(<\/body>|$)/i.test(html)) return true;
-  if (/<p[^>]*>\s*[A-Za-z0-9]{6,16}(?:\s+[A-Za-z0-9]{6,16}){1,3}\s*<\/p>\s*(<\/body>|$)/i.test(html)) return true;
+  /* ── Señal B: from con nombre típico warmup ───────────────────────── */
+  if (looksLikeWarmupSender(input.fromName, input.from)) {
+    return true;
+  }
 
-  /* ── Señal 3: subject con TAIL + body que contiene tokens warmup ── */
-  // Requerimos AL MENOS 2 señales para evitar falsos positivos.
-  let score = 0;
-
-  // Token code: letras + números mezclados, longitud 6-16, no es versión tipo "v2.1"
+  /* ── Señal C: código alfanumérico aislado en subject ───────────────
+     Token de 6-16 chars con letras Y dígitos mezclados (no versiones
+     ni códigos legítimos tipo BCN2025). */
   const isCodeToken = (t: string): boolean => {
-    if (!t || t.length < 6 || t.length > 16) return false;
+    if (!t || t.length < 6 || t.length > 20) return false;
     if (!/[A-Za-z]/.test(t) || !/[0-9]/.test(t)) return false;
-    if (/^v\d/i.test(t)) return false;       // v2.0, v3
-    if (/^[A-Z]{2,3}\d{2,4}$/.test(t)) return false;  // BCN2024, MAD2025 (códigos legítimos)
-    // Distribución MUY irregular de letras y números: típico de hash random
+    if (/^v\d/i.test(t)) return false; // v2.0
+    // Códigos legítimos: 2-3 letras seguidas de año tipo BCN2025, MAD24
+    if (/^[A-Z]{2,4}\d{2,4}$/.test(t)) return false;
+    // Hash random: 30%+ letras Y 20%+ dígitos
     const letters = (t.match(/[A-Za-z]/g) || []).length;
     const digits = (t.match(/[0-9]/g) || []).length;
-    // Requiere mezcla: al menos 30% de cada
     if (letters < t.length * 0.3 || digits < t.length * 0.2) return false;
     return true;
   };
 
-  // 3.a) Subject con separador final " | " o " — " + cola sospechosa
+  const subjectTokens = (s.match(/\b[A-Za-z0-9]{6,20}\b/g) || []);
+  const subjectCodes = subjectTokens.filter(isCodeToken);
+  if (subjectCodes.length >= 1) return true;  // 1 token random ya es suficiente
+
+  /* ── Señal D: cadena hifenada en subject ──────────────────────────── */
+  if (/\b[a-z]{3,}(?:-[a-z]{3,}){2,}\b/.test(s)) return true;
+
+  /* ── Señal E: subject con separador final + cola sospechosa ──────── */
   const tailMatch = s.match(/\s[|\-–—]\s+([^|]+?)\s*$/);
   if (tailMatch) {
     const tail = tailMatch[1].trim();
     const tailTokens = tail.split(/[\s_]+/).filter(Boolean);
-    if (tailTokens.some(isCodeToken)) score += 2; // tail con code-token → fuerte
-    // Cadena hifenada muy larga (4+ palabras): "ought-care-sing-blue" — muy sospechoso
-    if (/^[a-z]+(?:-[a-z]+){3,}$/.test(tail)) score += 2;
-    // Cadena hifenada 3 palabras EN LA COLA (no en el medio): menos sospechoso
-    else if (/^[a-z]+(?:-[a-z]+){2}$/.test(tail)) score += 1;
+    if (tailTokens.some(isCodeToken)) return true;
+    if (/^[a-z]+(?:-[a-z]+){1,}$/.test(tail)) return true;
   }
 
-  // 3.b) 2+ code tokens en el subject (no en la cola, sueltos)
-  const subjectCodes = (s.match(/\b[A-Za-z0-9]{6,16}\b/g) || []).filter(isCodeToken);
-  if (subjectCodes.length >= 2) score += 2;
-  else if (subjectCodes.length === 1) score += 1;
+  /* ── Señal F: footer <p>código</p> al final del HTML ───────────── */
+  if (/<p[^>]*>\s*[a-z]+(?:-[a-z]+){1,}\s+[A-Za-z0-9]{4,}\s*<\/p>\s*(<\/body>|$)/i.test(html)) return true;
+  if (/<p[^>]*>\s*[A-Za-z0-9]{6,16}(?:\s+[A-Za-z0-9]{6,16}){1,3}\s*<\/p>\s*(<\/body>|$)/i.test(html)) return true;
 
-  // 3.c) Cadena hifenada larga (4+ palabras) DENTRO del subject (no en la cola)
-  if (/\b[a-z]{3,}(?:-[a-z]{3,}){3,}\b/.test(s)) score += 1;
-
-  // 3.d) Body con cadena hifenada larga + code token
+  /* ── Señal G: cadena hifenada + code token en body ─────────────── */
   if (/\b[a-z]{3,}(?:-[a-z]{3,}){2,}\b/.test(bodyText)) {
     const bodyCodes = (bodyText.match(/\b[A-Za-z0-9]{6,16}\b/g) || []).filter(isCodeToken);
-    if (bodyCodes.length >= 1) score += 1;
+    if (bodyCodes.length >= 1) return true;
   }
 
-  // Necesita ≥2 señales para clasificar como warmup
-  return score >= 2;
+  return false;
 }
