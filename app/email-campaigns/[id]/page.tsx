@@ -340,8 +340,116 @@ function OverviewTab({ campaign }: { campaign: Campaign }) {
         Las métricas se actualizan cuando el worker de envíos procesa los pasos. Activa la campaña para empezar.
       </p>
 
+      {/* Performance por variante — A/B testing dashboard */}
+      <VariantStats campaignId={campaign.id} />
+
       {/* Activity log — timeline de eventos */}
       <ActivityLog campaignId={campaign.id} />
+    </div>
+  );
+}
+
+/** Dashboard de performance por step × variante (A/B testing). */
+function VariantStats({ campaignId }: { campaignId: string }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const r = await fetch(`/api/email-campaigns/${campaignId}/variant-stats`);
+        const j = await r.json();
+        if (alive) { setData(j); setLoading(false); }
+      } catch { if (alive) setLoading(false); }
+    }
+    load();
+    const h = setInterval(load, 60_000); // refresh cada 60s
+    return () => { alive = false; clearInterval(h); };
+  }, [campaignId]);
+
+  if (loading) return <div style={{ ...cardStyle, marginTop: 18, color: INK_4 }}>Cargando analytics…</div>;
+  if (!data?.steps) return null;
+
+  const hasAnySends = data.totals.total_sent > 0;
+
+  return (
+    <div style={{ ...cardStyle, marginTop: 18 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 14 }}>
+        <h3 style={cardTitle}>Performance por variante</h3>
+        <span style={{ fontSize: 11.5, color: INK_4, fontFamily: FONT_MONO }}>A/B · auto-refresh 60s</span>
+      </div>
+
+      {!hasAnySends && (
+        <p style={{ fontSize: 13, color: INK_4, margin: 0 }}>
+          Aún sin envíos. Las métricas aparecerán aquí cuando el worker empiece a enviar.
+        </p>
+      )}
+
+      {hasAnySends && data.steps.map((step: any) => (
+        <div key={step.step_id} style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${LINE}` }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
+            <h4 style={{ margin: 0, fontFamily: FONT_SANS, fontSize: 15, fontWeight: 700, color: INK }}>
+              Step {step.step_index + 1}
+            </h4>
+            <span style={{ fontSize: 12, color: INK_4, fontFamily: FONT_MONO }}>
+              {step.delay_days === 0 ? "inmediato" : `+${step.delay_days}d delay`}
+            </span>
+          </div>
+
+          {step.variants.map((v: any) => {
+            const replyPct = v.reply_rate.toFixed(1);
+            const bouncePct = v.bounce_rate.toFixed(1);
+            return (
+              <div key={v.variant_id} style={{
+                display: "grid", gridTemplateColumns: "auto 1fr auto auto auto auto",
+                gap: 14, alignItems: "center",
+                padding: "12px 14px", marginBottom: 8,
+                background: v.is_winner ? "rgba(31,138,91,0.06)" : SURF,
+                border: `1px solid ${v.is_winner ? "rgba(31,138,91,0.25)" : LINE}`,
+                borderRadius: 10,
+              }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8,
+                  background: v.is_winner ? GREEN : INK_4,
+                  color: "#fff", display: "grid", placeItems: "center",
+                  fontWeight: 800, fontSize: 14, fontFamily: FONT_SANS,
+                }}>
+                  {v.label}
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: INK_2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {v.subject_preview || <em style={{ color: INK_4 }}>(sin subject)</em>}
+                  </div>
+                  {v.is_winner && (
+                    <div style={{ fontSize: 11, color: GREEN, fontWeight: 700, marginTop: 2, fontFamily: FONT_MONO }}>
+                      ⭐ GANADORA
+                    </div>
+                  )}
+                </div>
+
+                <Stat label="Enviados" value={v.sent} color={INK_2} />
+                <Stat label="Replies" value={v.replied} sub={`${replyPct}%`} color={GREEN} highlight={v.is_winner} />
+                <Stat label="Bounces" value={v.bounced} sub={`${bouncePct}%`} color={v.bounce_rate > 5 ? DANGER : INK_4} />
+                <Stat label="Delivered" value={v.delivered} color={INK_2} />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, color, highlight }: { label: string; value: number; sub?: string; color: string; highlight?: boolean }) {
+  return (
+    <div style={{ textAlign: "center", minWidth: 64 }}>
+      <div style={{ fontSize: 10, color: INK_4, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</div>
+      <div style={{
+        fontFamily: FONT_MONO, fontWeight: highlight ? 800 : 700, fontSize: highlight ? 18 : 16,
+        color, marginTop: 2,
+      }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color, fontFamily: FONT_MONO, fontWeight: 600 }}>{sub}</div>}
     </div>
   );
 }
