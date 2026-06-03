@@ -90,7 +90,7 @@ export default function BandejasPage() {
   const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread" | "starred">("all");
+  const [filter, setFilter] = useState<"all" | "unread" | "starred" | "warmup" | "bounces">("all");
   const [view, setView] = useState<"inbox" | "sent">("inbox");
   const [sentMessages, setSentMessages] = useState<SentMessage[]>([]);
   const [sentTotal, setSentTotal] = useState(0);
@@ -147,6 +147,8 @@ export default function BandejasPage() {
       if (debouncedSearch) params.set("q", debouncedSearch);
       if (filter === "unread") params.set("unread", "1");
       if (filter === "starred") params.set("starred", "1");
+      if (filter === "warmup") params.set("only_warmup", "1");
+      if (filter === "bounces") params.set("only_bounces", "1");
       if (accountFilter) params.set("account_id", accountFilter);
       params.set("limit", "200");
       const r = await fetch("/api/email-inbox?" + params.toString());
@@ -386,10 +388,13 @@ export default function BandejasPage() {
 
           {/* Sub-filtros — distintos según vista */}
           {view === "inbox" ? (
-            <div style={{ display: "inline-flex", padding: 3, background: SURF, borderRadius: 10, border: `1px solid ${LINE}` }}>
-              {(["all", "unread", "starred"] as const).map((f) => (
-                <button key={f} onClick={() => setFilter(f)} style={segBtn(filter === f)}>
-                  {f === "all" ? "Todos" : f === "unread" ? "No leídos" : "★ Destacados"}
+            <div style={{ display: "inline-flex", padding: 3, background: SURF, borderRadius: 10, border: `1px solid ${LINE}`, flexWrap: "wrap" }}>
+              {(["all", "unread", "starred", "warmup", "bounces"] as const).map((f) => (
+                <button key={f} onClick={() => setFilter(f)} style={segBtn(filter === f)} title={
+                  f === "warmup" ? "Mensajes detectados como warmup (Lemwarm, Mailwarm, etc.) — por si la heurística se equivocó" :
+                  f === "bounces" ? "Bounces NDR / mailer-daemon — emails que no llegaron al destinatario" : undefined
+                }>
+                  {f === "all" ? "Todos" : f === "unread" ? "No leídos" : f === "starred" ? "★ Destacados" : f === "warmup" ? "Warmup" : "Bounces"}
                 </button>
               ))}
             </div>

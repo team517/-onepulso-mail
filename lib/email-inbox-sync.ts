@@ -88,12 +88,14 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
           const fromName = parsed.from?.value?.[0]?.name || (msg.envelope as any)?.from?.[0]?.name || "";
           const toAddress = parsed.to ? (Array.isArray(parsed.to) ? parsed.to[0]?.value?.[0]?.address : parsed.to.value?.[0]?.address) : account.email;
 
-          // Filtros (igual que en el Unibox original)
+          // Detección de warmup / bounce — NO descartamos el mensaje, solo lo
+          // marcamos con flag. El API oculta los warmup/bounce por defecto pero
+          // el usuario puede ver "Mostrar warmup" / "Mostrar bounces" si sospecha
+          // de un falso positivo (un email legítimo mal clasificado).
           const warmup = isWarmupMessage({ subject, text, html, from: fromAddress });
           const bounce = isBounceOrFailure({ from: fromAddress, fromAddress, fromName, subject, text });
-
-          if (warmup) { result.warmup_filtered++; continue; }   // descartado
-          if (bounce) { result.bounce_filtered++; continue; }   // descartado
+          if (warmup) result.warmup_filtered++;
+          if (bounce) result.bounce_filtered++;
 
           // Normalizar Message-ID con <>
           let messageId = parsed.messageId || (msg.envelope as any)?.messageId || "";
@@ -127,8 +129,8 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
             html: html.slice(0, 100000),
             flags: Array.isArray(msg.flags) ? msg.flags : [],
             thread_id: computeThreadId(inReplyTo, references, messageId),
-            is_warmup: false,
-            is_bounce: false,
+            is_warmup: warmup,
+            is_bounce: bounce,
           });
         } catch {
           // Mensaje malformado: lo saltamos sin abortar el sync entero

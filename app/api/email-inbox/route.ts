@@ -2,10 +2,14 @@
  * GET /api/email-inbox  → lista mensajes de TODAS las cuentas conectadas, agrupados por thread.
  *
  * Query params:
- *   ?account_id=X         filtra solo esa cuenta
- *   ?q=texto              busca en subject + from + preview
- *   ?starred=1            solo starred
- *   ?unread=1             solo no leídos (no \\Seen y no user_read)
+ *   ?account_id=X            filtra solo esa cuenta
+ *   ?q=texto                 busca en subject + from + preview
+ *   ?starred=1               solo starred
+ *   ?unread=1                solo no leídos (no \\Seen y no user_read)
+ *   ?include_warmup=1        incluye mensajes marcados como warmup (default: ocultos)
+ *   ?include_bounces=1       incluye bounces NDR (default: ocultos)
+ *   ?only_warmup=1           SOLO warmup (vista de auditoría)
+ *   ?only_bounces=1          SOLO bounces (vista de auditoría)
  *   ?limit=50&offset=0
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -20,6 +24,10 @@ export async function GET(req: NextRequest) {
   const accountId = url.searchParams.get("account_id");
   const onlyStarred = url.searchParams.get("starred") === "1";
   const onlyUnread = url.searchParams.get("unread") === "1";
+  const includeWarmup = url.searchParams.get("include_warmup") === "1";
+  const includeBounces = url.searchParams.get("include_bounces") === "1";
+  const onlyWarmup = url.searchParams.get("only_warmup") === "1";
+  const onlyBounces = url.searchParams.get("only_bounces") === "1";
   const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get("limit") || "100")));
   const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0"));
 
@@ -42,6 +50,20 @@ export async function GET(req: NextRequest) {
   }
   if (onlyStarred) all = all.filter((m) => m.starred);
   if (onlyUnread) all = all.filter((m) => !m.flags.includes("\\Seen") && !m.user_read);
+
+  // Filtros warmup / bounces:
+  //   · Vista por defecto: oculta warmup + bounces (lo legítimo de un cold email)
+  //   · only_warmup → solo warmup (auditoría)
+  //   · only_bounces → solo bounces (revisar NDRs)
+  //   · include_* → no filtra (lo ves todo)
+  if (onlyWarmup) {
+    all = all.filter((m) => m.is_warmup);
+  } else if (onlyBounces) {
+    all = all.filter((m) => m.is_bounce);
+  } else {
+    if (!includeWarmup) all = all.filter((m) => !m.is_warmup);
+    if (!includeBounces) all = all.filter((m) => !m.is_bounce);
+  }
 
   // Ordena por fecha desc
   all.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
