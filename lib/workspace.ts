@@ -81,3 +81,31 @@ export async function scopedKey(key: string): Promise<string> {
   const ws = await getWorkspaceId();
   return `ws/${ws}/${key}`;
 }
+
+/** Devuelve el userId firmado del cookie (sin namespace ws/). null si no hay sesión válida. */
+export async function getCurrentUserId(): Promise<string | null> {
+  try {
+    const c = await cookies();
+    const sess = c.get("onepulso_session")?.value;
+    if (!sess) return null;
+    return verifySession(sess);
+  } catch {
+    return null;
+  }
+}
+
+/** El usuario actual es el admin del entorno (AUTH_EMAIL via env)? */
+export async function isCurrentUserAdmin(): Promise<boolean> {
+  const uid = await getCurrentUserId();
+  if (uid === "__admin__") return true;
+  if (!uid) return false;
+  // Usuario creado en la plataforma con role: "admin"
+  const { getUser } = await import("./users");
+  const u = await getUser(uid);
+  return u?.role === "admin";
+}
+
+/** El usuario actual está logueado? Para gating de endpoints. */
+export async function requireAuth(): Promise<string | null> {
+  return await getCurrentUserId();
+}

@@ -26,10 +26,25 @@ type Settings = {
 
 type Tab = "session" | "users";
 
+type Me = {
+  authenticated: boolean;
+  id?: string;
+  email?: string;
+  name?: string;
+  role?: "admin" | "user";
+  is_admin: boolean;
+  workspace?: string;
+};
+
 export default function ConfiguracionPage() {
   const router = useRouter();
   const { show: showToast, ToastNode } = useToast();
   const [tab, setTab] = useState<Tab>("session");
+  const [me, setMe] = useState<Me | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me").then((r) => r.json()).then(setMe).catch(() => {});
+  }, []);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -61,17 +76,54 @@ export default function ConfiguracionPage() {
         </div>
       </section>
 
+      {/* Identidad del usuario actual */}
+      {me?.authenticated && (
+        <section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 28px 8px" }}>
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "14px 18px", background: SURF, border: `1px solid ${LINE}`, borderRadius: 12,
+            marginBottom: 18, gap: 16, flexWrap: "wrap",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{
+                width: 44, height: 44, borderRadius: "50%", background: BRAND_G,
+                display: "grid", placeItems: "center", color: "#fff", fontWeight: 700, fontSize: 16,
+                fontFamily: FONT_SANS,
+              }}>
+                {(me.name || me.email || "?").slice(0, 1).toUpperCase()}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: INK, fontFamily: FONT_SANS }}>
+                  {me.name || me.email}
+                </div>
+                <div style={{ fontSize: 12.5, color: INK_4, marginTop: 2 }}>
+                  {me.email} · {me.is_admin ? "Admin" : "Usuario"} · workspace propio
+                </div>
+              </div>
+            </div>
+            <code style={{
+              fontFamily: FONT_MONO, fontSize: 11, color: INK_4,
+              background: PAPER, padding: "4px 10px", borderRadius: 6, border: `1px solid ${LINE}`,
+            }}>
+              {me.workspace || "—"}
+            </code>
+          </div>
+        </section>
+      )}
+
       {/* Tabs */}
       <section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 28px" }}>
         <div style={{ display: "flex", gap: 2, borderBottom: `1px solid ${LINE}`, marginBottom: 24 }}>
           <TabBtn id="session" active={tab === "session"} onClick={() => setTab("session")} label="Sesión" icon={<IconClock />} />
-          <TabBtn id="users" active={tab === "users"} onClick={() => setTab("users")} label="Usuarios" icon={<IconUsers />} />
+          {me?.is_admin && (
+            <TabBtn id="users" active={tab === "users"} onClick={() => setTab("users")} label="Usuarios" icon={<IconUsers />} />
+          )}
         </div>
       </section>
 
       <section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 28px 80px" }}>
-        {tab === "session" && <SessionTab toast={showToast} />}
-        {tab === "users" && <UsersTab toast={showToast} />}
+        {tab === "session" && <SessionTab toast={showToast} canEdit={!!me?.is_admin} />}
+        {tab === "users" && me?.is_admin && <UsersTab toast={showToast} />}
       </section>
 
       {ToastNode}
@@ -97,7 +149,7 @@ function TabBtn({ active, onClick, label, icon }: { id: string; active: boolean;
 }
 
 /* ── Tab: SESIÓN ──────────────────────────────────────────────────────── */
-function SessionTab({ toast }: { toast: (s: string) => void }) {
+function SessionTab({ toast, canEdit }: { toast: (s: string) => void; canEdit: boolean }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
   const [defaultDays, setDefaultDays] = useState(7);
@@ -140,8 +192,9 @@ function SessionTab({ toast }: { toast: (s: string) => void }) {
         <h3 style={cardTitle}>Duración de la sesión por defecto</h3>
         <p style={{ fontSize: 13.5, color: INK_3, margin: "0 0 14px" }}>
           Cuántos días dura el login antes de pedirte iniciar sesión otra vez. El usuario puede elegir un valor distinto en el login, hasta el máximo de abajo.
+          {!canEdit && <span style={{ display: "block", marginTop: 6, color: ORANGE, fontWeight: 600 }}>Solo el admin puede modificar estos valores globales.</span>}
         </p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, opacity: canEdit ? 1 : 0.6, pointerEvents: canEdit ? "auto" : "none" }}>
           <label>
             <div style={miniLabel}>Por defecto (días)</div>
             <select value={defaultDays} onChange={(e) => setDefaultDays(parseInt(e.target.value))} style={inputStyle}>
@@ -172,11 +225,13 @@ function SessionTab({ toast }: { toast: (s: string) => void }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={save} disabled={saving || !dirty} style={{ ...brandBtn, opacity: saving || !dirty ? 0.55 : 1 }}>
-          {saving ? "Guardando…" : "Guardar ajustes"}
-        </button>
-      </div>
+      {canEdit && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={save} disabled={saving || !dirty} style={{ ...brandBtn, opacity: saving || !dirty ? 0.55 : 1 }}>
+            {saving ? "Guardando…" : "Guardar ajustes"}
+          </button>
+        </div>
+      )}
 
       {/* Cambiar tu propia contraseña */}
       <ChangeMyPasswordCard toast={toast} />
