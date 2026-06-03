@@ -81,8 +81,11 @@ const STATE: WorkerState = {
   log: [],
 };
 
-/** Mutex: solo un tick corre a la vez. */
+/** Mutex: solo un tick corre a la vez. Con timeout duro para liberar
+ *  si el anterior se cuelga (p.ej. IMAP de una cuenta sin respuesta). */
 let TICK_IN_FLIGHT = false;
+let TICK_STARTED_AT = 0;
+const TICK_MAX_MS = 4 * 60 * 1000; // 4 min — si excede, asumimos que se colgó
 
 function log(entry: Omit<WorkerLogEntry, "at">) {
   STATE.log.push({ ...entry, at: new Date().toISOString() });
@@ -629,13 +632,21 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   await saveCampaign(campaign);
 }
 
-/** Una iteración del worker — con mutex global. */
+/** Una iteración del worker — con mutex global con timeout automático. */
 export async function tickWorker() {
+  // Si el mutex lleva ≥ TICK_MAX_MS bloqueado, asumimos que el tick anterior
+  // se colgó y forzamos la liberación. Evita bloqueo eterno.
   if (TICK_IN_FLIGHT) {
-    log({ level: "warn", message: "Tick saltado (anterior aún en curso)" });
-    return;
+    const elapsedMs = Date.now() - TICK_STARTED_AT;
+    if (elapsedMs < TICK_MAX_MS) {
+      // Aún dentro de margen — saltamos silenciosamente (sin log para no spammear)
+      return;
+    }
+    log({ level: "warn", message: `Tick anterior colgado >${Math.round(elapsedMs / 60000)} min — forzando reset` });
+    TICK_IN_FLIGHT = false;
   }
   TICK_IN_FLIGHT = true;
+  TICK_STARTED_AT = Date.now();
   STATE.last_loop_at = new Date().toISOString();
   STATE.loops += 1;
   try {
@@ -643,7 +654,11 @@ export async function tickWorker() {
     const workspaces = await listAllWorkspaces();
     for (const ws of workspaces) {
       try {
-        await withWorkspace(ws, () => tickWorkspace());
+        // Cada workspace se procesa con timeout duro para no atascar al siguiente
+        await Promise.race([
+          withWorkspace(ws, () => tickWorkspace()),
+          new Promise<void>((resolve) => setTimeout(() => resolve(), 90_000)),
+        ]);
       } catch (e: any) {
         log({ level: "error", message: `Tick workspace ${ws} error: ${e.message}` });
       }
@@ -653,7 +668,8 @@ export async function tickWorker() {
   }
 }
 
-/** Procesa un único workspace. */
+/** Procesa un único workspace — SOLO campañas + follow-ups. Rápido.
+ *  El sync IMAP corre en su propio scheduler (tickInboxSync). */
 async function tickWorkspace() {
   try {
     const accounts = await listEmailAccounts();
@@ -670,47 +686,6 @@ async function tickWorkspace() {
       }
     }
 
-    // Sync IMAP cada 4 loops (≈ 2 min)
-    if (STATE.loops % 4 === 0 || STATE.loops === 1) {
-      try {
-        const inboxResults = await syncAllInboxes(accounts, 3);
-        const totalNew = inboxResults.reduce((s, r) => s + r.new_count, 0);
-        const totalFiltered = inboxResults.reduce((s, r) => s + r.warmup_filtered + r.bounce_filtered, 0);
-        if (totalNew > 0 || totalFiltered > 0) {
-          log({ level: "info", message: `Sync IMAP: +${totalNew} nuevos, ${totalFiltered} filtrados` });
-        }
-        if (totalNew > 0) {
-          const det = await detectRepliesForAccounts(accounts.map((a) => a.id));
-          if (det.detections.length > 0) {
-            for (const d of det.detections) {
-              log({
-                level: "info",
-                message: `🟢 Reply detectado de ${d.lead_email} en "${d.campaign_name}"`,
-                campaign_id: d.campaign_id, campaign_name: d.campaign_name,
-                lead_email: d.lead_email, account_email: d.via_account,
-              });
-            }
-          }
-          // Detectar bounces NDR (mailer-daemon) — marca leads bounced
-          try {
-            const bouncesDetected = await detectBouncesFromInbox(accounts.map((a) => a.id));
-            for (const b of bouncesDetected) {
-              log({
-                level: "warn",
-                message: `📬 Bounce NDR detectado: ${b.lead_email} (${b.reason})`,
-                campaign_id: b.campaign_id, campaign_name: b.campaign_name,
-                lead_email: b.lead_email,
-              });
-            }
-          } catch (e: any) {
-            log({ level: "warn", message: `Detección de bounces falló: ${e.message}` });
-          }
-        }
-      } catch (e: any) {
-        log({ level: "warn", message: `Sync IMAP falló: ${e.message}` });
-      }
-    }
-
     try {
       await processFollowUps();
     } catch (e: any) {
@@ -721,44 +696,141 @@ async function tickWorkspace() {
   }
 }
 
-/** Detecta NDR (mailer-daemon, delivery failure) en la bandeja y marca leads bounced. */
+/** Tick de sincronización IMAP — independiente del tick de campañas.
+ *  Corre cada 2 min con su propio mutex. Si IMAP de una cuenta se cuelga,
+ *  no afecta a los envíos de campañas. */
+let SYNC_IN_FLIGHT = false;
+let SYNC_STARTED_AT = 0;
+const SYNC_MAX_MS = 3 * 60 * 1000;
+
+export async function tickInboxSync() {
+  if (SYNC_IN_FLIGHT) {
+    if (Date.now() - SYNC_STARTED_AT < SYNC_MAX_MS) return;
+    log({ level: "warn", message: "Sync IMAP anterior colgado — forzando reset" });
+    SYNC_IN_FLIGHT = false;
+  }
+  SYNC_IN_FLIGHT = true;
+  SYNC_STARTED_AT = Date.now();
+  try {
+    const { listAllWorkspaces, withWorkspace } = await import("./workspace");
+    const workspaces = await listAllWorkspaces();
+    for (const ws of workspaces) {
+      try {
+        await Promise.race([
+          withWorkspace(ws, () => syncWorkspaceInbox()),
+          new Promise<void>((resolve) => setTimeout(() => resolve(), 60_000)),
+        ]);
+      } catch (e: any) {
+        log({ level: "error", message: `Sync workspace ${ws} error: ${e.message}` });
+      }
+    }
+  } finally {
+    SYNC_IN_FLIGHT = false;
+  }
+}
+
+async function syncWorkspaceInbox() {
+  try {
+    const accounts = await listEmailAccounts();
+    if (accounts.length === 0) return;
+    const inboxResults = await syncAllInboxes(accounts, 5); // concurrencia 5 (antes 3)
+    const totalNew = inboxResults.reduce((s, r) => s + r.new_count, 0);
+    const totalFiltered = inboxResults.reduce((s, r) => s + r.warmup_filtered + r.bounce_filtered, 0);
+    if (totalNew > 0 || totalFiltered > 0) {
+      log({ level: "info", message: `Sync IMAP: +${totalNew} nuevos, ${totalFiltered} filtrados` });
+    }
+    if (totalNew > 0) {
+      try {
+        const det = await detectRepliesForAccounts(accounts.map((a) => a.id));
+        for (const d of det.detections) {
+          log({
+            level: "info",
+            message: `🟢 Reply detectado de ${d.lead_email} en "${d.campaign_name}"`,
+            campaign_id: d.campaign_id, campaign_name: d.campaign_name,
+            lead_email: d.lead_email, account_email: d.via_account,
+          });
+        }
+      } catch (e: any) {
+        log({ level: "warn", message: `Detección replies falló: ${e.message}` });
+      }
+      // Bounces NDR — solo si hay leads activos (evita iterar en vacío)
+      try {
+        const bouncesDetected = await detectBouncesFromInbox(accounts.map((a) => a.id));
+        for (const b of bouncesDetected) {
+          log({
+            level: "warn",
+            message: `📬 Bounce NDR: ${b.lead_email} (${b.reason})`,
+            campaign_id: b.campaign_id, campaign_name: b.campaign_name,
+            lead_email: b.lead_email,
+          });
+        }
+      } catch (e: any) {
+        log({ level: "warn", message: `Detección bounces falló: ${e.message}` });
+      }
+    }
+  } catch (e: any) {
+    log({ level: "warn", message: `Sync IMAP falló: ${e.message}` });
+  }
+}
+
+/** Detecta NDR (mailer-daemon, delivery failure) en la bandeja y marca leads bounced.
+ *  Optimizado: solo escanea mensajes RECIENTES (≤7 días) y solo los que
+ *  parecen NDR. Acumula updates por campaña para 1 write por campaña en vez de N. */
 async function detectBouncesFromInbox(accountIds: string[]): Promise<Array<{ lead_email: string; campaign_id: string; campaign_name: string; reason: string }>> {
   const out: Array<{ lead_email: string; campaign_id: string; campaign_name: string; reason: string }> = [];
-  const campaigns = await listCampaigns();
-  // Indexa leads activos por email
-  type LeadRef = { campaignId: string; campaignName: string; leadId: string; leadEmail: string };
-  const leadIndex = new Map<string, LeadRef>();
-  for (const c of campaigns) {
-    const leads = await listLeads(c.id);
-    for (const l of leads) {
-      if (["bounced", "unsubscribed", "completed"].includes(l.status)) continue;
-      leadIndex.set(l.email.toLowerCase(), { campaignId: c.id, campaignName: c.name, leadId: l.id, leadEmail: l.email });
-    }
-  }
-  if (leadIndex.size === 0) return out;
-
-  // Heurística: subject empieza por "Mail Delivery", "Undelivered", etc; body contiene email del lead.
   const NDR_SUBJ = /(mail\s*delivery|undeliverable|delivery\s*status|failure\s*notice|returned\s*mail|undelivered)/i;
+  const NDR_FROM = /mailer-daemon|postmaster/i;
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  // 1. Recoge candidatos NDR de TODAS las cuentas (sin abrir campañas todavía)
+  const ndrTexts: string[] = [];
   for (const accId of accountIds) {
     const msgs = await listMessagesForAccount(accId);
     for (const m of msgs) {
-      if (!NDR_SUBJ.test(m.subject || "") && !/mailer-daemon|postmaster/i.test(m.from_address || "")) continue;
-      const text = `${m.subject || ""} ${m.preview || ""} ${m.text || ""}`.toLowerCase();
-      for (const [email, ref] of leadIndex.entries()) {
-        if (!text.includes(email)) continue;
-        // Marca como bounced
-        const leads = await listLeads(ref.campaignId);
-        const lidx = leads.findIndex((l) => l.id === ref.leadId);
-        if (lidx >= 0 && leads[lidx].status !== "bounced") {
-          leads[lidx].status = "bounced";
-          leads[lidx].last_event = `NDR bounce detectado`;
-          leads[lidx].finished_reason = "NDR";
-          await writeLeads(ref.campaignId, leads);
-          out.push({ lead_email: ref.leadEmail, campaign_id: ref.campaignId, campaign_name: ref.campaignName, reason: "NDR" });
-        }
-        leadIndex.delete(email);
-      }
+      if (new Date(m.date).getTime() < cutoff) continue;
+      if (!NDR_SUBJ.test(m.subject || "") && !NDR_FROM.test(m.from_address || "")) continue;
+      ndrTexts.push(`${m.subject || ""} ${m.preview || ""} ${m.text || ""}`.toLowerCase());
     }
+  }
+  if (ndrTexts.length === 0) return out;
+  const ndrBlob = ndrTexts.join(" \n ");
+
+  // 2. Indexa leads activos
+  const campaigns = await listCampaigns();
+  // emailLower → { cId, cName, lId }
+  const leadByEmail = new Map<string, { campaignId: string; campaignName: string; leadId: string; leadEmail: string }>();
+  // campaign → leads array (cacheado para write batch)
+  const leadsByCampaign = new Map<string, Lead[]>();
+  for (const c of campaigns) {
+    const leads = await listLeads(c.id);
+    leadsByCampaign.set(c.id, leads);
+    for (const l of leads) {
+      if (["bounced", "unsubscribed", "completed"].includes(l.status)) continue;
+      leadByEmail.set(l.email.toLowerCase(), { campaignId: c.id, campaignName: c.name, leadId: l.id, leadEmail: l.email });
+    }
+  }
+  if (leadByEmail.size === 0) return out;
+
+  // 3. Para cada email candidato, comprueba si aparece en algún NDR
+  const dirtyCampaigns = new Set<string>();
+  for (const [email, ref] of leadByEmail.entries()) {
+    if (!ndrBlob.includes(email)) continue;
+    const leads = leadsByCampaign.get(ref.campaignId);
+    if (!leads) continue;
+    const lidx = leads.findIndex((l) => l.id === ref.leadId);
+    if (lidx >= 0 && leads[lidx].status !== "bounced") {
+      leads[lidx].status = "bounced";
+      leads[lidx].last_event = `NDR bounce detectado`;
+      leads[lidx].finished_reason = "NDR";
+      dirtyCampaigns.add(ref.campaignId);
+      out.push({ lead_email: ref.leadEmail, campaign_id: ref.campaignId, campaign_name: ref.campaignName, reason: "NDR" });
+    }
+  }
+
+  // 4. Escribe cada campaña UNA vez
+  for (const cid of dirtyCampaigns) {
+    const leads = leadsByCampaign.get(cid);
+    if (leads) await writeLeads(cid, leads);
   }
   return out;
 }
@@ -871,19 +943,25 @@ async function processFollowUps() {
   }
 }
 
-/** Loop continuo del worker. */
+/** Dos loops independientes: campañas (rápido, 30s) + sync IMAP (lento, 2 min). */
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
+let syncIntervalHandle: ReturnType<typeof setInterval> | null = null;
 
 export function startWorker(intervalSeconds = 30) {
   if (STATE.running) return;
   STATE.running = true;
-  log({ level: "info", message: `Worker iniciado · intervalo ${intervalSeconds}s` });
+  log({ level: "info", message: `Worker iniciado · campañas ${intervalSeconds}s · sync IMAP 2min` });
+  // Campañas + follow-ups (rápido)
   tickWorker().catch(() => {});
   intervalHandle = setInterval(() => { tickWorker().catch(() => {}); }, intervalSeconds * 1000);
+  // Sync IMAP (lento, separado del tick principal)
+  setTimeout(() => { tickInboxSync().catch(() => {}); }, 10_000); // primer sync a los 10s
+  syncIntervalHandle = setInterval(() => { tickInboxSync().catch(() => {}); }, 120_000); // cada 2 min
 }
 
 export function stopWorker() {
   if (intervalHandle) { clearInterval(intervalHandle); intervalHandle = null; }
+  if (syncIntervalHandle) { clearInterval(syncIntervalHandle); syncIntervalHandle = null; }
   STATE.running = false;
   log({ level: "info", message: "Worker detenido" });
 }
