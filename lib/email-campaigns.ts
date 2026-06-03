@@ -139,6 +139,10 @@ export type Lead = {
   sticky_account_id?: string;
   added_at: string;
   last_contacted_at?: string | null;
+  /** Timestamp del PRIMER envío (step 1). Inmutable tras setearse.
+   *  Usado para respetar max_new_leads_per_day (cap diario de leads
+   *  entrando a la secuencia, estilo Instantly). */
+  first_contacted_at?: string | null;
   last_event?: string | null;        // "sent step 2", "opened", "replied"
   /** Razón por la que se completó/paró. */
   finished_reason?: string | null;

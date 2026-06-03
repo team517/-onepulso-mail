@@ -439,8 +439,33 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
     usedLeads.add(c.lead.id);
   }
 
-  // PASO 2: leads sin sticky → rotación
-  const freshLeads = candidates.filter((c) => !c.lead.sticky_account_id && !usedLeads.has(c.lead.id));
+  // PASO 2: leads sin sticky → rotación (step 1 a leads nuevos)
+  //
+  // CAP DIARIO DE LEADS NUEVOS (estilo Instantly):
+  // Contamos cuántos leads han recibido SU PRIMER step hoy en la TZ de la
+  // campaña. Si llega al límite max_new_leads_per_day, ese día ya no entran
+  // más leads nuevos — el resto del budget se reserva para follow-ups.
+  // Default 100/día por campaña; configurable en Options.
+  const maxNewLeadsPerDay = campaign.options.max_new_leads_per_day ?? 100;
+  const today = dayInTz(now, tz);
+  const newLeadsToday = leads.reduce((acc, l) => {
+    if (!l.first_contacted_at) return acc;
+    return dayInTz(new Date(l.first_contacted_at), tz) === today ? acc + 1 : acc;
+  }, 0);
+  const newLeadsBudget = Math.max(0, maxNewLeadsPerDay - newLeadsToday);
+
+  const freshLeads = candidates
+    .filter((c) => !c.lead.sticky_account_id && !usedLeads.has(c.lead.id))
+    .slice(0, newLeadsBudget);  // ← respeta el cap; resto espera al día siguiente
+
+  if (newLeadsBudget === 0 && candidates.some((c) => !c.lead.sticky_account_id)) {
+    log({
+      level: "info",
+      message: `Cap diario de leads nuevos alcanzado (${maxNewLeadsPerDay}/día) — solo follow-ups hoy`,
+      campaign_id: campaign.id, campaign_name: campaign.name,
+    });
+  }
+
   if (freshLeads.length > 0) {
     let pool: EmailAccount[];
     if (rotation === "random") {
@@ -521,11 +546,15 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
       const leadIdx = leads.findIndex((l) => l.id === target.lead.id);
       if (leadIdx >= 0) {
         const isFinalStep = target.stepIdx + 1 >= campaign.steps.length;
+        const isFirstSend = target.stepIdx === 0 || !target.lead.first_contacted_at;
         leads[leadIdx] = {
           ...target.lead,
           status: isFinalStep ? "completed" : "active",
           current_step: target.stepIdx + 1,
           last_contacted_at: nowIso,
+          // Solo se setea en el PRIMER envío del lead — inmutable después.
+          // Usado por el cap diario de leads nuevos (max_new_leads_per_day).
+          first_contacted_at: target.lead.first_contacted_at || (isFirstSend ? nowIso : null),
           last_event: `sent step ${target.stepIdx + 1} variant ${target.variant.label}`,
           sticky_account_id: target.lead.sticky_account_id || account.id,
           finished_reason: isFinalStep ? "completed_sequence" : null,
