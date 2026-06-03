@@ -160,16 +160,34 @@ export default function BandejasPage() {
   }
   useEffect(() => { load(); }, [debouncedSearch, filter, accountFilter]);
 
-  // ── AUTO-SYNC cada 2 min ─────────────────────────────────────
-  // El server-side worker ya sincroniza IMAP cada 2 min. Aquí solo recargamos
-  // la lista local desde la API (sin tocar IMAP) para reflejar mensajes nuevos.
+  // ── AUTO-SYNC cada 60 s (UI) + IMAP sync server-side cada 90 s ─────
+  // El worker server ya sincroniza IMAP cada 2 min. Aquí pedimos un sync
+  // adicional cada 90s para que la latencia entre que llega un email y
+  // aparece en la UI sea ~1 min en lugar de 4. Y recargamos la lista
+  // local cada 60s para reflejar los mensajes nuevos.
   useEffect(() => {
-    const handle = setInterval(() => {
-      // refresh silenciosa (sin spinner)
-      load();
-    }, 2 * 60 * 1000);
-    return () => clearInterval(handle);
-  }, [debouncedSearch, filter, accountFilter]);
+    // Refresh silencioso de la lista cada 60s
+    const refreshHandle = setInterval(() => {
+      if (view === "inbox") load();
+      else loadSent();
+    }, 60 * 1000);
+
+    // Trigger sync IMAP server cada 90s (más rápido que el worker que es cada 2 min)
+    const syncHandle = setInterval(() => {
+      fetch("/api/email-inbox/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+        .then((r) => r.json())
+        .then(() => {
+          if (view === "inbox") load();
+          else loadSent();
+        })
+        .catch(() => {});
+    }, 90 * 1000);
+
+    return () => {
+      clearInterval(refreshHandle);
+      clearInterval(syncHandle);
+    };
+  }, [debouncedSearch, filter, accountFilter, view]);
 
   async function syncNow() {
     setSyncing(true);
@@ -407,7 +425,7 @@ export default function BandejasPage() {
               fontFamily: FONT_UI,
             }} title="El servidor sincroniza IMAP cada 2 min y el cliente refresca la lista automáticamente.">
               <span style={{ width: 6, height: 6, borderRadius: "50%", background: GREEN, boxShadow: "0 0 0 3px rgba(31,138,91,0.18)" }} />
-              Auto-sync · 2 min
+              Auto-sync · 90s
             </span>
             <button onClick={syncNow} disabled={syncing} style={{ ...brandBtn, opacity: syncing ? 0.55 : 1 }}>
               {syncing ? (
@@ -674,7 +692,14 @@ export default function BandejasPage() {
                 <ReplyComposer
                   message={detail.message}
                   onCancel={() => setShowReply(false)}
-                  onSent={() => { setShowReply(false); showToast("✓ Respuesta enviada"); }}
+                  onSent={() => {
+                    setShowReply(false);
+                    showToast("✓ Respuesta enviada");
+                    // Refresca AMBAS vistas — el reply queda registrado en Enviados
+                    // y el thread se marca como respondido. Sin esperar al poll.
+                    loadSent();
+                    load();
+                  }}
                   toast={showToast}
                 />
               )}
