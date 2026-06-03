@@ -88,8 +88,45 @@ let TICK_STARTED_AT = 0;
 const TICK_MAX_MS = 4 * 60 * 1000; // 4 min — si excede, asumimos que se colgó
 
 function log(entry: Omit<WorkerLogEntry, "at">) {
-  STATE.log.push({ ...entry, at: new Date().toISOString() });
-  if (STATE.log.length > 500) STATE.log.shift();
+  const now = Date.now();
+  const newEntry = { ...entry, at: new Date(now).toISOString() };
+
+  // Dedupe inteligente: si la última entrada es IDÉNTICA y reciente (<60s),
+  // no la añadimos otra vez — evita spam de "Sync IMAP: +0 nuevos" cada 2min.
+  const last = STATE.log[STATE.log.length - 1];
+  if (
+    last &&
+    last.level === newEntry.level &&
+    last.message === newEntry.message &&
+    last.campaign_id === newEntry.campaign_id &&
+    last.account_id === newEntry.account_id &&
+    last.lead_email === newEntry.lead_email &&
+    now - new Date(last.at).getTime() < 60_000
+  ) {
+    // Actualiza el timestamp para que se vea "fresca" pero no crea duplicado
+    last.at = newEntry.at;
+    return;
+  }
+
+  STATE.log.push(newEntry);
+
+  // Limpieza por edad:
+  //  · info → 30 min
+  //  · warn → 2 h
+  //  · error/send → 24 h
+  const ageLimits: Record<string, number> = {
+    info: 30 * 60_000,
+    warn: 2 * 60 * 60_000,
+    error: 24 * 60 * 60_000,
+    send: 24 * 60 * 60_000,
+  };
+  STATE.log = STATE.log.filter((e) => {
+    const limit = ageLimits[e.level] ?? 60 * 60_000;
+    return now - new Date(e.at).getTime() < limit;
+  });
+
+  // Tope duro: 500 entradas
+  if (STATE.log.length > 500) STATE.log.splice(0, STATE.log.length - 500);
 }
 
 export function getWorkerStatus() {

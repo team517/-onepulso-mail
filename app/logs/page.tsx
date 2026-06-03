@@ -68,7 +68,7 @@ export default function LogsPage() {
   useEffect(() => { load(); }, []);
   useEffect(() => {
     if (paused) return;
-    const h = setInterval(load, 10_000); // refresh cada 10s
+    const h = setInterval(load, 40_000); // refresh cada 40s (antes 10s — demasiado parpadeo)
     return () => clearInterval(h);
   }, [paused]);
 
@@ -126,7 +126,7 @@ export default function LogsPage() {
     return arr;
   }, [worker, sent]);
 
-  const filtered = events.filter((e) => {
+  const filteredRaw = events.filter((e) => {
     if (filter !== "all" && e.level !== filter) return false;
     if (search) {
       const q = search.toLowerCase();
@@ -137,6 +137,31 @@ export default function LogsPage() {
     }
     return true;
   });
+
+  /** Colapsa mensajes idénticos consecutivos en 1 entrada con contador.
+   *  Ejemplo: 6 "Tick saltado" → 1 fila con badge "×6". El timestamp es
+   *  el más reciente del grupo. Reduce drasticamente el ruido. */
+  const filtered = useMemo(() => {
+    const out: Array<typeof filteredRaw[number] & { count?: number; firstAt?: string }> = [];
+    for (const ev of filteredRaw) {
+      const prev = out[out.length - 1];
+      // Mismo level + mismo mensaje + misma cuenta/lead/campaña → agrupar
+      if (
+        prev &&
+        prev.level === ev.level &&
+        prev.message === ev.message &&
+        prev.campaign_id === ev.campaign_id &&
+        prev.lead_email === ev.lead_email &&
+        prev.account_email === ev.account_email
+      ) {
+        prev.count = (prev.count || 1) + 1;
+        prev.firstAt = ev.at; // el más viejo (los eventos están ordenados desc)
+        continue;
+      }
+      out.push({ ...ev, count: 1 });
+    }
+    return out;
+  }, [filteredRaw]);
 
   const counts = {
     send: events.filter((e) => e.level === "send").length,
@@ -234,7 +259,7 @@ export default function LogsPage() {
           <span>Worker: <strong style={{ color: worker?.running ? GREEN : "#c12530" }}>{worker?.running ? "RUNNING" : "STOPPED"}</strong></span>
           <span>Loops: <strong style={{ color: INK_2, fontFamily: FONT_MONO }}>{worker?.loops ?? 0}</strong></span>
           <span>Cuentas tracked: <strong style={{ color: INK_2, fontFamily: FONT_MONO }}>{worker?.tracked_accounts ?? 0}</strong></span>
-          {!paused && <span style={{ color: GREEN }}>· auto-refresh cada 10s</span>}
+          {!paused && <span style={{ color: GREEN }}>· auto-refresh cada 40s</span>}
         </div>
       </section>
 
@@ -257,7 +282,7 @@ export default function LogsPage() {
           ) : (
             <div>
               {filtered.map((e) => (
-                <LogRow key={e.id} event={e} />
+                <LogRow key={e.id} event={e} count={e.count} firstAt={e.firstAt} />
               ))}
             </div>
           )}
@@ -269,7 +294,7 @@ export default function LogsPage() {
   );
 }
 
-function LogRow({ event: e }: { event: any }) {
+function LogRow({ event: e, count, firstAt }: { event: any; count?: number; firstAt?: string }) {
   const map: Record<string, { color: string; bg: string; label: string; icon: string }> = {
     send:  { color: GREEN, bg: "rgba(31,138,91,0.10)", label: "SEND", icon: "✉" },
     info:  { color: BLUE, bg: "rgba(5,102,234,0.10)", label: "INFO", icon: "ⓘ" },
@@ -279,6 +304,7 @@ function LogRow({ event: e }: { event: any }) {
   const c = map[e.level] || map.info;
   const ageMin = Math.round((Date.now() - new Date(e.at).getTime()) / 60000);
   const ageStr = ageMin < 1 ? "ahora" : ageMin < 60 ? `${ageMin}m` : ageMin < 1440 ? `${Math.round(ageMin / 60)}h` : `${Math.round(ageMin / 1440)}d`;
+  const isGrouped = (count || 1) > 1;
 
   return (
     <div style={{
@@ -301,8 +327,17 @@ function LogRow({ event: e }: { event: any }) {
       }}>{c.label}</span>
 
       <div style={{ minWidth: 0 }}>
-        <div style={{ color: INK_2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {e.message}
+        <div style={{ color: INK_2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{e.message}</span>
+          {isGrouped && (
+            <span style={{
+              fontFamily: FONT_MONO, fontSize: 10.5, fontWeight: 700,
+              color: c.color, background: c.bg, padding: "2px 7px", borderRadius: 10,
+              flexShrink: 0,
+            }} title={firstAt ? `Primera vez: ${new Date(firstAt).toLocaleString("es-ES")}` : undefined}>
+              ×{count}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 10.5, color: INK_4, marginTop: 2, fontFamily: FONT_MONO, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {e.campaign_name && (
