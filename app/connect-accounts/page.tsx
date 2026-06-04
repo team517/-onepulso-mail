@@ -489,6 +489,19 @@ export default function ConnectAccountsPage() {
           </h2>
           <span style={{ fontSize: 13, color: INK_4 }}>· {accounts.length} en total</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={async () => {
+                if (!confirm("¿Resetear cooldowns de TODAS las cuentas?\n\nEsto limpia el estado interno de rate limit. Si una cuenta sigue bloqueada por IONOS, el próximo envío fallará igual.")) return;
+                const r = await fetch("/api/email-accounts/reset-cooldowns", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+                const j = await r.json();
+                showToast(j.message || "Cooldowns reseteados");
+                loadAccounts();
+              }}
+              style={{ ...ghostBtn, color: "#b97500", borderColor: "rgba(249,166,3,0.4)" }}
+              title="Limpia el cooldown de las cuentas (útil si quedaron bloqueadas tras un 450 de IONOS)"
+            >
+              ⏰ Resetear cooldowns
+            </button>
             <button onClick={verifyAll} style={ghostBtn}><IconSignal /> Verificar todas</button>
             <button onClick={() => setShowBulkIonos(true)} style={ghostBtn}><IconGlobe /> Bulk IONOS</button>
             <button onClick={() => setShowBulkCsv(true)} style={ghostBtn}><IconUpload /> Bulk CSV</button>

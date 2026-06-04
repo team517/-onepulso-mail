@@ -129,6 +129,16 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     return (a.sent_today ?? 0) < dailyLimitFor(a);
   }
 
+  /** True si la cuenta está en COOLDOWN largo (>10 min en next_eligible_at).
+   *  El gap normal del worker es 6-9 min — esto se ignora en manual.
+   *  Un cooldown >10 min siempre viene de un error de servidor (450, 421, etc.)
+   *  → SÍ se respeta en manual para no seguir martilleando IONOS. */
+  function isInLongCooldown(a: EmailAccount): boolean {
+    if (!a.next_eligible_at) return false;
+    const remainingMs = new Date(a.next_eligible_at).getTime() - Date.now();
+    return remainingMs > 10 * 60_000; // >10 min = cooldown real
+  }
+
   // Construye orden de cuentas a probar
   const isFirstStep = stepIdx === 0 || !lead.last_message_id;
   let accountOrder: EmailAccount[] = [];
@@ -143,12 +153,27 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       accountOrder.push(a);
     }
   }
-  const eligible = accountOrder.filter(isUnderDailyLimit);
+  const eligible = accountOrder.filter((a) => isUnderDailyLimit(a) && !isInLongCooldown(a));
   if (eligible.length === 0) {
+    // Detalla por qué cada cuenta fue excluida
+    const cooldownDetails = accountOrder
+      .filter(isInLongCooldown)
+      .map((a) => ({
+        email: a.email,
+        cooldown_remaining_min: Math.ceil((new Date(a.next_eligible_at!).getTime() - Date.now()) / 60_000),
+        last_error: a.last_smtp_error || "rate limit del servidor",
+      }));
+    const dailyExceeded = accountOrder.filter((a) => !isUnderDailyLimit(a)).map((a) => a.email);
+
     return NextResponse.json({
-      error: `Todas las cuentas asignadas alcanzaron su daily limit hoy`,
-      hint: "Espera a mañana o asigna más cuentas a esta campaña.",
-    }, { status: 400 });
+      error: `Ninguna cuenta disponible para enviar AHORA`,
+      hint: cooldownDetails.length > 0
+        ? `${cooldownDetails.length} cuenta${cooldownDetails.length > 1 ? "s" : ""} en cooldown por IONOS (servidor bloqueó por enviar demasiado). Espera o pulsa "Resetear cooldowns" en /connect-accounts.`
+        : `${dailyExceeded.length} cuenta${dailyExceeded.length > 1 ? "s" : ""} alcanzaron daily limit. Espera a mañana.`,
+      cooldown_details: cooldownDetails,
+      daily_exceeded: dailyExceeded,
+      action: cooldownDetails.length > 0 ? "wait_or_reset" : "wait_tomorrow",
+    }, { status: 503 });
   }
 
   // ── Renderizar ──
