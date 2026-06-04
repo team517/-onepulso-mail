@@ -818,6 +818,79 @@ function SubjectBodyEditor({
     });
   }
 
+  /** Auto-negrita: detecta lo importante del body y lo envuelve en <strong>.
+   *  Heurísticas (cero APIs, todo en cliente):
+   *    1. Variables {{cualquier_cosa}} → siempre destacadas
+   *    2. Números con unidad: "3x", "50%", "10 días", "2 horas", "+200%"
+   *    3. Power words típicas de cold email (ES/EN): gratis, exclusivo, urgente, etc.
+   *    4. CTAs: frases ≤8 palabras terminadas en "?" (preguntas directas)
+   *    5. Frases entre **asteriscos** → respeta marcado manual previo
+   *  Si encuentra <strong> existentes, NO los duplica. Idempotente.
+   */
+  function autoBold() {
+    const el = bodyRef.current;
+    if (!el || !variant.body) return;
+    let text = variant.body;
+
+    // 1. Quitar <strong> previos para no duplicar (re-aplicamos limpio)
+    text = text.replace(/<\/?strong>/gi, "");
+
+    // 2. Power words (multi-idioma). Caso-insensible, palabra completa.
+    const powerWords = [
+      // Español
+      "gratis", "gratuito", "exclusivo", "exclusiva", "urgente", "limitado", "limitada",
+      "garantizado", "garantizada", "rápido", "rápida", "ahora", "hoy", "ahorra", "ahorro",
+      "ganarás", "consigue", "obtén", "regalo", "descuento", "oferta", "novedad",
+      "doble", "triple", "más rápido", "más fácil", "mejor", "único", "única",
+      "personalizado", "personalizada", "automático", "automática", "sin compromiso",
+      // Inglés
+      "free", "exclusive", "urgent", "limited", "guaranteed", "now", "today",
+      "save", "gain", "earn", "get", "gift", "discount", "deal", "new",
+      "double", "triple", "faster", "easier", "better", "unique", "best",
+      "personalized", "automatic", "no commitment",
+    ];
+
+    // 3. Números con unidad (genéricos, no muy específicos para no spamear bold)
+    const numberWithUnit = /(\+?\d+(?:[.,]\d+)?\s*(?:%|x\b|×|veces?|días?|horas?|minutos?|años?|meses?|semanas?|euros?|€|\$|usd|users?|usuarios?|clients?|clientes?|leads?|emails?|reuniones?)\b)/gi;
+    text = text.replace(numberWithUnit, (m) => `<strong>${m}</strong>`);
+
+    // 4. Power words → bold (whole-word match, evita romper palabras en medio)
+    const powerWordsRe = new RegExp(`\\b(${powerWords.map((w) => w.replace(/\s+/g, "\\s+")).join("|")})\\b`, "gi");
+    text = text.replace(powerWordsRe, (m) => `<strong>${m}</strong>`);
+
+    // 5. Variables {{...}} → bold
+    text = text.replace(/(\{\{\s*[a-zA-Z0-9_]+(?:\s*\|\s*[^}]*)?\s*\}\})/g, (m) => `<strong>${m}</strong>`);
+
+    // 6. **markdown bold** → <strong>
+    text = text.replace(/\*\*([^*\n]+)\*\*/g, (_m, inner) => `<strong>${inner}</strong>`);
+
+    // 7. CTAs cortas terminadas en ? (max 8 palabras, evita preguntar todo el párrafo)
+    text = text.replace(/([^.!?\n]{8,120}\?)/g, (m) => {
+      const wordCount = m.trim().split(/\s+/).length;
+      if (wordCount > 14) return m;  // demasiado larga, no es CTA
+      // Si ya tiene <strong> dentro, no envolver otra vez
+      if (m.includes("<strong>")) return m;
+      return `<strong>${m.trim()}</strong>`;
+    });
+
+    // 8. Limpieza: <strong> anidados o adyacentes
+    text = text.replace(/<strong>\s*<strong>/gi, "<strong>");
+    text = text.replace(/<\/strong>\s*<\/strong>/gi, "</strong>");
+    text = text.replace(/<\/strong>(\s*)<strong>/gi, "$1");
+
+    onChange("body", text);
+    // Restaura foco
+    requestAnimationFrame(() => { el.focus(); });
+  }
+
+  /** Quita TODAS las <strong> del body (revertir auto-negrita). */
+  function clearBold() {
+    if (!variant.body) return;
+    const clean = variant.body.replace(/<\/?strong>/gi, "");
+    onChange("body", clean);
+    requestAnimationFrame(() => { bodyRef.current?.focus(); });
+  }
+
   const subjectFocusedBorder = lastFocused === "subject" ? `1.5px solid ${PURPLE}` : `1px solid ${LINE2}`;
   const bodyFocusedBorder = lastFocused === "body" ? `1.5px solid ${PURPLE}` : `1px solid ${LINE2}`;
 
@@ -844,7 +917,7 @@ function SubjectBodyEditor({
       </label>
 
       {/* Body */}
-      <label style={{ display: "block", marginBottom: 12 }}>
+      <label style={{ display: "block", marginBottom: 8 }}>
         <div style={{ ...miniLabel, display: "flex", alignItems: "center", gap: 6 }}>
           Cuerpo del email
           {lastFocused === "body" && (
@@ -852,6 +925,38 @@ function SubjectBodyEditor({
               ACTIVO
             </span>
           )}
+          {/* CTAs auto-negrita */}
+          <div style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={autoBold}
+              style={{
+                padding: "3px 9px", borderRadius: 6,
+                background: "rgba(154,105,245,0.10)", color: PURPLE_DEEP,
+                border: `1px solid rgba(154,105,245,0.30)`,
+                fontSize: 11, fontWeight: 700, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 4,
+              }}
+              title="Detecta automáticamente lo importante (cifras, power words, variables, CTAs) y lo pone en negrita"
+            >
+              ✨ Auto-negrita
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={clearBold}
+              style={{
+                padding: "3px 9px", borderRadius: 6,
+                background: "transparent", color: INK_4,
+                border: `1px solid ${LINE2}`,
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}
+              title="Quita todas las negritas del cuerpo"
+            >
+              ✕ Limpiar
+            </button>
+          </div>
         </div>
         <textarea
           ref={bodyRef}
@@ -866,6 +971,9 @@ function SubjectBodyEditor({
             border: bodyFocusedBorder, transition: "border-color .15s",
           }}
         />
+        <div style={{ fontSize: 10.5, color: INK_5, marginTop: 4, fontFamily: FONT_MONO }}>
+          Tip: rodea texto con <code style={{ background: SURF, padding: "0 4px", borderRadius: 3 }}>**doble asterisco**</code> y la auto-negrita lo respetará.
+        </div>
       </label>
 
       {/* Helpers: chips que insertan en el campo activo (Asunto o Cuerpo) */}
