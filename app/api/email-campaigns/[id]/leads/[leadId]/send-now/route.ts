@@ -160,31 +160,49 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
   // ── Renderizar y enviar ──
   const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
-  const bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
-  // Detección robusta de cuerpo vacío: strip HTML + entidades + whitespace.
-  // Esto detecta cuerpos que son solo <br>, &nbsp; o variables sin valor.
-  const bodyPlain = bodyHtml
-    .replace(/<[^>]+>/g, "")     // tags HTML
-    .replace(/&[a-z]+;/gi, "")   // entidades HTML &nbsp; &amp; etc.
-    .replace(/\s+/g, "")         // todo whitespace
-    .trim();
+  let bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
+
+  // FALLBACK: si la variante elegida quedó vacía tras render (variables sin
+  // valor en este lead), busca otra variante del mismo step que SÍ tenga
+  // contenido tras render. Solo bloqueamos si NINGUNA renderiza con texto.
+  function trimAll(s: string): string {
+    return s.replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, "").trim();
+  }
+  if (!trimAll(bodyHtml)) {
+    for (const v of step.variants) {
+      if (v.id === variant.id) continue;
+      const candidate = renderTemplate(v.body || "", lead.variables, { seed: lead.id });
+      if (trimAll(candidate)) {
+        bodyHtml = candidate;
+        // No reemplazamos `variant` para que el log siga atribuyendo al pick
+        // determinista original — solo usamos el body de la otra variante.
+        break;
+      }
+    }
+  }
+
+  // Check final — solo bloquea si TRAS fallback sigue vacío de texto real.
+  const hasText = trimAll(bodyHtml).length > 0;
   if (!subjectRaw.trim()) {
     return NextResponse.json({
       error: `El step ${stepIdx + 1} variante ${variant.label} no tiene SUBJECT`,
       hint: "Edita la campaña → Sequences → Step " + (stepIdx + 1) + " y rellena el subject"
     }, { status: 400 });
   }
-  if (!bodyPlain) {
+  if (!hasText) {
     return NextResponse.json({
-      error: `El step ${stepIdx + 1} variante ${variant.label} no tiene CUERPO de mensaje`,
-      hint: `Edita la campaña → Sequences → Step ${stepIdx + 1} y rellena el body. Tu variante actual ${variant.body ? "solo contiene HTML vacío o variables sin valor" : "está completamente vacía"}.`,
+      error: `El step ${stepIdx + 1} no tiene CUERPO de mensaje válido para este lead`,
+      hint: `El body usa variables que este lead no tiene rellenas. Edita la campaña → Sequences → Step ${stepIdx + 1}, o añade los valores que faltan al lead.`,
       debug: {
         step: stepIdx + 1,
-        variant: variant.label,
-        variant_subject_length: (variant.subject || "").length,
-        variant_body_length: (variant.body || "").length,
-        rendered_body_length: bodyHtml.length,
-        rendered_body_preview: bodyHtml.slice(0, 100),
+        variant_picked: variant.label,
+        all_variants: step.variants.map((v) => ({
+          label: v.label,
+          subject_len: (v.subject || "").length,
+          body_len: (v.body || "").length,
+          rendered_len: renderTemplate(v.body || "", lead.variables, { seed: lead.id }).length,
+        })),
+        lead_variables: Object.keys(lead.variables || {}),
       }
     }, { status: 400 });
   }

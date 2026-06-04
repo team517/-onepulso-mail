@@ -282,16 +282,29 @@ async function sendOne(
   account: EmailAccount, lead: Lead, variant: Variant, campaign: Campaign, stepIdx: number,
 ): Promise<{ ok: boolean; error?: string; message_id?: string; thread_subject?: string; references?: string[]; appended?: boolean; sent_folder?: string }> {
   const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
-  const bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
-  // Strip HTML + entities + whitespace para detectar bodies "vacíos" que
-  // técnicamente tienen contenido pero no representan un mensaje real.
-  const bodyPlain = bodyHtml
-    .replace(/<[^>]+>/g, "")
-    .replace(/&[a-z]+;/gi, "")
-    .replace(/\s+/g, "")
-    .trim();
-  if (!subjectRaw.trim() || !bodyPlain) {
-    return { ok: false, error: `Step ${stepIdx + 1} variante ${variant.label}: subject o body vacío` };
+  let bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
+
+  // FALLBACK: si la variante elegida quedó vacía tras render para ESTE lead,
+  // intenta otras variantes del mismo step. Solo bloqueamos si NINGUNA tiene
+  // contenido tras render.
+  function trimAll(s: string): string {
+    return s.replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, "").trim();
+  }
+  if (!trimAll(bodyHtml)) {
+    const stepDef = campaign.steps[stepIdx];
+    if (stepDef) {
+      for (const v of stepDef.variants) {
+        if (v.id === variant.id) continue;
+        const candidate = renderTemplate(v.body || "", lead.variables, { seed: lead.id });
+        if (trimAll(candidate)) {
+          bodyHtml = candidate;
+          break;
+        }
+      }
+    }
+  }
+  if (!subjectRaw.trim() || !trimAll(bodyHtml)) {
+    return { ok: false, error: `Step ${stepIdx + 1} variante ${variant.label}: subject o body vacío para este lead (variables sin valor)` };
   }
 
   // ── Threading: step 0 abre hilo. Step 1+ → Re: + In-Reply-To + References
