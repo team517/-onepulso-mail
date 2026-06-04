@@ -481,11 +481,26 @@ function deterministicUnit(s: string): number {
  */
 export function pickVariant(step: Step, leadId: string): Variant {
   if (step.variants.length === 0) return newVariant("A");
-  // Filtra variantes vacías (sin subject NI body) — no las queremos rotar porque
-  // el envío fallaría.
-  const eligible = step.variants.filter((v) => (v.subject || "").trim() || (v.body || "").trim());
-  // Si TODAS están vacías, devuelve consistentemente la primera (no rotamos
-  // entre vacías para que el log de errores sea predecible).
+
+  /** Detecta si un body tiene contenido REAL (no solo HTML/whitespace/entidades). */
+  function hasRealBody(body: string): boolean {
+    if (!body) return false;
+    const stripped = body
+      .replace(/<[^>]+>/g, "")
+      .replace(/&[a-z]+;/gi, "")
+      .replace(/\s+/g, "")
+      .trim();
+    return stripped.length > 0;
+  }
+
+  // Filtra variantes con AMBOS subject Y body con contenido real.
+  // Antes era "subject OR body" — demasiado permisivo, podía elegir una
+  // variante con subject pero body vacío y enviar un email sin texto.
+  const eligible = step.variants.filter((v) => (v.subject || "").trim() && hasRealBody(v.body || ""));
+
+  // Si NINGUNA tiene contenido completo → fallback a la primera variante
+  // del step (sea o no completa). El check de body vacío en sendOne fallará
+  // con un mensaje claro indicando qué arreglar.
   if (eligible.length === 0) return step.variants[0];
 
   const totalWeight = eligible.reduce((s, v) => s + Math.max(1, v.weight), 0);
