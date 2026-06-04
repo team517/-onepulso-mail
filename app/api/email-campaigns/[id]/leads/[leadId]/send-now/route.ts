@@ -374,17 +374,32 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
           });
         }
 
-        // Si NO es step 1, no podemos rotar (sticky obligatoria para threading)
-        if (!isFirstStep) {
-          return NextResponse.json({
-            ok: false,
-            error: `La cuenta ${tryAccount.email} fue rate-limited por su servidor SMTP.`,
-            hint: `Es step ${stepIdx + 1} (follow-up) — para preservar el threading, este lead solo puede enviarse desde su cuenta original. Espera ~30 min y reintenta.`,
-            attempts_failed: attempts,
-            account: tryAccount.email,
-            server_error: errMsg,
-          }, { status: 503 });
-        }
+        // Calcula stats reales de la cuenta en la última hora
+        try {
+          const { listSent } = await import("@/lib/email-sent-log");
+          const allSent = await listSent();
+          const cutoff = Date.now() - 60 * 60_000;
+          const lastHour = allSent.filter(
+            (s) => s.account_id === tryAccount.id && new Date(s.sent_at).getTime() > cutoff && s.ok,
+          ).length;
+
+          // Si NO es step 1, no podemos rotar
+          if (!isFirstStep) {
+            return NextResponse.json({
+              ok: false,
+              error: `IONOS bloqueó temporalmente ${tryAccount.email} (rate limit del servidor).`,
+              hint: `Esta cuenta envió ${lastHour} emails en la última hora — IONOS tiene un límite de ~30/h por cuenta. Es step ${stepIdx + 1} y para preservar el threading SOLO puede enviarse desde esta cuenta. Cooldown automático aplicado: ~30 min.`,
+              attempts_failed: attempts,
+              account: tryAccount.email,
+              account_stats: {
+                sent_last_hour: lastHour,
+                sent_today: tryAccount.sent_today ?? 0,
+                cooldown_min: 30,
+              },
+              server_error: errMsg,
+            }, { status: 503 });
+          }
+        } catch {}
         // En step 1, sigue probando la siguiente cuenta
         continue;
       }
