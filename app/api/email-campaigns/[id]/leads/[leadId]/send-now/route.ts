@@ -190,20 +190,36 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }, { status: 400 });
   }
   if (!hasText) {
+    // Extrae qué variables usa el body (todas las variantes del step)
+    const varsInBody = new Set<string>();
+    for (const v of step.variants) {
+      const re = /\{\{\s*([a-zA-Z0-9_]+)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(v.body || "")) !== null) varsInBody.add(m[1]);
+    }
+    const leadVarsSet = new Set(Object.keys(lead.variables || {}));
+    const missing = Array.from(varsInBody).filter((v) => !leadVarsSet.has(v) || !(lead.variables[v] || "").trim());
+
     return NextResponse.json({
-      error: `El step ${stepIdx + 1} no tiene CUERPO de mensaje válido para este lead`,
-      hint: `El body usa variables que este lead no tiene rellenas. Edita la campaña → Sequences → Step ${stepIdx + 1}, o añade los valores que faltan al lead.`,
+      error: `Faltan variables en este lead`,
+      hint: missing.length > 0
+        ? `Tu mensaje usa: ${Array.from(varsInBody).map((v) => `{{${v}}}`).join(", ")}. Faltan rellenar: ${missing.map((v) => `{{${v}}}`).join(", ")}. Pulsa "Editar lead" para añadirlas.`
+        : `El body de la variante está literalmente vacío. Edita la campaña → Sequences → Step ${stepIdx + 1}.`,
       debug: {
         step: stepIdx + 1,
         variant_picked: variant.label,
+        variables_used_in_body: Array.from(varsInBody),
+        variables_in_lead: Object.keys(lead.variables || {}),
+        variables_missing: missing,
         all_variants: step.variants.map((v) => ({
           label: v.label,
           subject_len: (v.subject || "").length,
           body_len: (v.body || "").length,
           rendered_len: renderTemplate(v.body || "", lead.variables, { seed: lead.id }).length,
         })),
-        lead_variables: Object.keys(lead.variables || {}),
-      }
+      },
+      action: "edit_lead", // hint para el frontend
+      missing_variables: missing,
     }, { status: 400 });
   }
 

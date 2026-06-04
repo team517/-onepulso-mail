@@ -1786,6 +1786,8 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
 
   // Map leadId → "sending" durante el envío manual
   const [sendingNow, setSendingNow] = useState<Set<string>>(new Set());
+  // Lead que se está editando (modal)
+  const [editingLead, setEditingLead] = useState<{ lead: Lead; missingVars?: string[] } | null>(null);
 
   async function sendNow(lead: Lead) {
     const stepNum = lead.current_step + 1;
@@ -1801,7 +1803,6 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
       const j = await r.json();
       if (r.ok && j.ok) {
         toast(`✓ Step ${j.step_sent} enviado desde ${j.account}`);
-        // Optimistic update del lead
         setLeads((arr) => arr.map((l) => l.id === lead.id ? {
           ...l,
           current_step: j.step_sent,
@@ -1809,6 +1810,10 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
           status: j.lead_status || l.status,
           last_event: `manual send step ${j.step_sent}`,
         } : l));
+      } else if (j.action === "edit_lead" && Array.isArray(j.missing_variables) && j.missing_variables.length > 0) {
+        // Faltan variables → abre directamente el modal de edición con esas vars pre-rellenadas
+        toast(`Faltan ${j.missing_variables.length} variable${j.missing_variables.length === 1 ? "" : "s"} en este lead`);
+        setEditingLead({ lead, missingVars: j.missing_variables });
       } else {
         toast(`✗ ${j.error || "Error al enviar"}${j.hint ? ` — ${j.hint}` : ""}`);
       }
@@ -2027,7 +2032,14 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
                   <td style={{ ...td, color: INK_4, fontSize: 12 }}>
                     {new Date(l.added_at).toLocaleDateString("es-ES")}
                   </td>
-                  <td style={{ ...td, textAlign: "right" }}>
+                  <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setEditingLead({ lead: l }); }}
+                      style={{ ...ghostBtn, height: 26, padding: "0 10px", fontSize: 11.5, fontWeight: 600, marginRight: 6 }}
+                      title="Editar variables del lead"
+                    >
+                      ✏ Editar
+                    </button>
                     {["new", "active"].includes(l.status) && l.current_step < campaign.steps.length && (
                       <button
                         onClick={(e) => { e.stopPropagation(); sendNow(l); }}
@@ -2103,7 +2115,161 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
           toast={toast}
         />
       )}
+
+      {editingLead && (
+        <EditLeadModal
+          campaign={campaign}
+          lead={editingLead.lead}
+          missingVars={editingLead.missingVars}
+          onClose={() => setEditingLead(null)}
+          onSaved={(updatedLead) => {
+            setEditingLead(null);
+            // Optimistic update
+            setLeads((arr) => arr.map((l) => l.id === updatedLead.id ? updatedLead : l));
+            toast("✓ Lead actualizado");
+          }}
+          toast={toast}
+        />
+      )}
     </div>
+  );
+}
+
+/** Modal para editar variables de un lead existente. Usado para rellenar
+ *  variables faltantes cuando "Enviar ahora" detecta que el template las
+ *  necesita pero el lead no las tiene. */
+function EditLeadModal({ campaign, lead, missingVars, onClose, onSaved, toast }: {
+  campaign: Campaign;
+  lead: Lead;
+  missingVars?: string[];
+  onClose: () => void;
+  onSaved: (lead: Lead) => void;
+  toast: (s: string) => void;
+}) {
+  // Inicializa con todas las variables conocidas: campaign.variables + missing + lead.variables
+  const initialKeys = useMemo(() => {
+    const set = new Set<string>();
+    (campaign.variables || []).forEach((v) => set.add(v));
+    (missingVars || []).forEach((v) => set.add(v));
+    Object.keys(lead.variables || {}).forEach((v) => set.add(v));
+    return Array.from(set);
+  }, [campaign.variables, missingVars, lead.variables]);
+
+  const [vars, setVars] = useState<{ key: string; value: string; missing?: boolean }[]>(() =>
+    initialKeys.map((k) => ({
+      key: k,
+      value: lead.variables?.[k] || "",
+      missing: (missingVars || []).includes(k),
+    }))
+  );
+  const [submitting, setSubmitting] = useState(false);
+
+  function addRow() {
+    setVars((prev) => [...prev, { key: "", value: "" }]);
+  }
+  function removeRow(i: number) {
+    setVars((prev) => prev.filter((_, idx) => idx !== i));
+  }
+  function update(i: number, field: "key" | "value", val: string) {
+    setVars((prev) => prev.map((v, idx) => idx === i ? { ...v, [field]: val } : v));
+  }
+
+  async function save() {
+    setSubmitting(true);
+    try {
+      const variables: Record<string, string> = {};
+      for (const { key, value } of vars) {
+        const k = key.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+        if (k) variables[k] = value.trim();
+      }
+      const r = await fetch(`/api/email-campaigns/${campaign.id}/leads/${lead.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variables }),
+      });
+      const j = await r.json();
+      if (r.ok && j.ok) {
+        onSaved(j.lead);
+      } else {
+        toast(`✗ ${j.error || "Error al guardar"}`);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const missingCount = vars.filter((v) => v.missing && !v.value.trim()).length;
+
+  return (
+    <ModalShell
+      title={`Editar lead · ${lead.email}`}
+      subtitle={missingVars && missingVars.length > 0
+        ? `Faltan ${missingVars.length} variable${missingVars.length === 1 ? "" : "s"} que el template necesita.`
+        : "Rellena o modifica las variables del lead."
+      }
+      onClose={onClose}
+      width={720}
+      footer={
+        <>
+          <button onClick={onClose} style={ghostBtn} disabled={submitting}>Cancelar</button>
+          <button
+            onClick={save}
+            disabled={submitting}
+            style={{ ...brandBtn, opacity: submitting ? 0.55 : 1 }}
+          >
+            {submitting ? "Guardando…" : "Guardar cambios"}
+          </button>
+        </>
+      }
+    >
+      {missingCount > 0 && (
+        <div style={{
+          padding: "10px 14px", marginBottom: 14,
+          background: "rgba(249,166,3,0.08)", border: "1px solid rgba(249,166,3,0.25)",
+          borderRadius: 10, color: "#b97500", fontSize: 12.5, fontWeight: 600,
+        }}>
+          ⚠ {missingCount} variable{missingCount === 1 ? "" : "s"} en naranja sin rellenar — el template las necesita.
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        {vars.map((v, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "200px 1fr auto", gap: 8 }}>
+            <input
+              type="text"
+              value={v.key}
+              onChange={(e) => update(i, "key", e.target.value)}
+              placeholder="variable_name"
+              style={{
+                ...inputStyle, fontFamily: FONT_MONO, fontSize: 12.5,
+                borderColor: v.missing && !v.value.trim() ? "rgba(249,166,3,0.5)" : LINE2,
+                background: v.missing && !v.value.trim() ? "rgba(249,166,3,0.04)" : "#fff",
+              }}
+            />
+            <input
+              type="text"
+              value={v.value}
+              onChange={(e) => update(i, "value", e.target.value)}
+              placeholder={v.missing ? "← rellena este valor" : "valor"}
+              style={{
+                ...inputStyle,
+                borderColor: v.missing && !v.value.trim() ? "rgba(249,166,3,0.5)" : LINE2,
+                background: v.missing && !v.value.trim() ? "rgba(249,166,3,0.04)" : "#fff",
+              }}
+            />
+            <button
+              onClick={() => removeRow(i)}
+              style={{ ...ghostBtn, height: 38, padding: "0 10px", color: INK_4 }}
+              title="Quitar"
+            >×</button>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={addRow} style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}>
+        + Añadir otra variable
+      </button>
+    </ModalShell>
   );
 }
 
