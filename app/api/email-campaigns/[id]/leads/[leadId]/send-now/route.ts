@@ -1,25 +1,27 @@
 /**
  * POST /api/email-campaigns/[id]/leads/[leadId]/send-now
  *
- * Envía MANUALMENTE el step actual del lead, bypaseando el delay y el schedule.
+ * Envía MANUALMENTE el step actual del lead.
+ *   - Bypasea delay entre steps
+ *   - Bypasea schedule
+ *   - Bypasea rate limit (gap 6-9 min)
  *
- * Sí respeta:
- *   - Rate limit de la cuenta (6-9 min gap) — si la cuenta está rate-limited
- *     devuelve error, NO la bypasa (sería quemar la cuenta).
- *   - Daily limit — si la cuenta está al máximo, error.
- *   - Status del lead: solo envía si status ∈ {new, active}.
+ * Solo respeta:
+ *   - status del lead (new/active)
+ *   - daily limit por cuenta (no quemar la cuenta)
+ *   - sticky_account_id (en step 2+ usa la misma cuenta para preservar threading)
  *
- * Si el lead tiene sticky_account_id → usa esa cuenta.
- * Si no → la primera cuenta asignada que esté ready.
- *
- * Threading se preserva igual que el worker (step 2+ va como "Re: ...").
+ * AUTOFALLBACK si la cuenta devuelve 450/421/451 (IONOS rate limit del servidor):
+ *   - Solo en step 1 (sin sticky aún) prueba la siguiente cuenta asignada.
+ *   - En step 2+ la cuenta sticky es obligatoria → si falla, devuelve error
+ *     pidiendo esperar.
+ *   - Cuenta que falló: cooldown 30 min en next_eligible_at.
  */
 import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 import { ImapFlow } from "imapflow";
 import {
   getCampaign, listLeads, writeLeads, pickVariant, renderTemplate,
-  type Lead, type Variant, type Campaign,
 } from "@/lib/email-campaigns";
 import { listEmailAccounts, upsertEmailAccount, getEmailAccount, getEffectiveDailyLimit, type EmailAccount } from "@/lib/email-accounts";
 import { logSentMessage } from "@/lib/email-sent-log";
@@ -40,7 +42,6 @@ function ensureRe(s: string): string {
   return `Re: ${s}`;
 }
 
-/** Detecta path del Sent folder. */
 async function findSentFolder(client: ImapFlow): Promise<string | null> {
   try {
     const list = (await client.list()) as any[];
@@ -50,12 +51,9 @@ async function findSentFolder(client: ImapFlow): Promise<string | null> {
     }
     if (list.some((m) => m.path?.startsWith("[Gmail]"))) return "[Gmail]/Sent Mail";
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-/** APPEND best-effort al Sent folder del IMAP. */
 async function appendToSent(account: EmailAccount, mime: string): Promise<{ ok: boolean; folder?: string }> {
   const client = new ImapFlow({
     host: account.imap_host,
@@ -71,22 +69,18 @@ async function appendToSent(account: EmailAccount, mime: string): Promise<{ ok: 
       new Promise((_, rej) => setTimeout(() => rej(new Error("IMAP timeout")), 10000)),
     ]);
     const sent = await findSentFolder(client);
-    if (!sent) {
-      try { await client.logout(); } catch {}
-      return { ok: false };
-    }
-    try {
-      await client.append(sent, mime, ["\\Seen"]);
-      try { await client.logout(); } catch {}
-      return { ok: true, folder: sent };
-    } catch {
-      try { await client.logout(); } catch {}
-      return { ok: false, folder: sent };
-    }
-  } catch {
-    try { client.close(); } catch {}
-    return { ok: false };
-  }
+    if (!sent) { try { await client.logout(); } catch {} return { ok: false }; }
+    try { await client.append(sent, mime, ["\\Seen"]); try { await client.logout(); } catch {} return { ok: true, folder: sent }; }
+    catch { try { await client.logout(); } catch {} return { ok: false, folder: sent }; }
+  } catch { try { client.close(); } catch {} return { ok: false }; }
+}
+
+/** Detecta errores de RATE LIMIT del servidor SMTP (no del destinatario). */
+function isServerRateLimitError(err: any): boolean {
+  const msg = ((err?.message || "") + " " + (err?.response || "")).toLowerCase();
+  if (/\b(450|421|451|429)\b/.test(msg)) return true;
+  if (/too\s*many|rate\s*limit|send\s*limit|throttl|mail\s*send\s*limit|requested\s*action\s*aborted|mailbox\s*unavailable/i.test(msg)) return true;
+  return false;
 }
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string; leadId: string }> }) {
@@ -112,7 +106,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const step = campaign.steps[stepIdx];
   const variant = pickVariant(step, lead.id);
 
-  // Buscar cuenta — sticky o primera asignada lista
+  // Cuentas asignadas con SMTP ok
   const allAccounts = await listEmailAccounts();
   const tagSet = new Set(campaign.account_tags || []);
   const idSet = new Set(campaign.account_ids || []);
@@ -126,70 +120,60 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Campaña sin cuentas SMTP asignadas" }, { status: 400 });
   }
 
-  // Si sticky → solo esa cuenta
-  let account: EmailAccount | undefined;
-  if (lead.sticky_account_id) {
-    account = assigned.find((a) => a.id === lead.sticky_account_id);
-    if (!account) {
-      // Sticky borrado → primera asignada
-      account = assigned[0];
-    }
-  } else {
-    account = assigned[0];
+  // Filtro por daily limit
+  const campaignDailyLimit = campaign.options.daily_limit_per_account ?? 30;
+  function dailyLimitFor(a: EmailAccount) {
+    return Math.min(getEffectiveDailyLimit(a), campaignDailyLimit);
   }
-  if (!account) {
-    return NextResponse.json({ error: "No hay cuenta disponible para enviar" }, { status: 400 });
+  function isUnderDailyLimit(a: EmailAccount): boolean {
+    return (a.sent_today ?? 0) < dailyLimitFor(a);
   }
 
-  // Check daily limit (esto SÍ se respeta — proteger la cuenta de spam)
-  const campaignDailyLimit = campaign.options.daily_limit_per_account ?? 30;
-  const dailyLimit = Math.min(getEffectiveDailyLimit(account), campaignDailyLimit);
-  if ((account.sent_today ?? 0) >= dailyLimit) {
+  // Construye orden de cuentas a probar
+  const isFirstStep = stepIdx === 0 || !lead.last_message_id;
+  let accountOrder: EmailAccount[] = [];
+  if (lead.sticky_account_id) {
+    const sticky = assigned.find((a) => a.id === lead.sticky_account_id);
+    if (sticky) accountOrder.push(sticky);
+  }
+  // En step 1 (sin sticky) O fallback en step 1 si sticky falla, añade el resto
+  if (!lead.sticky_account_id || isFirstStep) {
+    for (const a of assigned) {
+      if (accountOrder.find((x) => x.id === a.id)) continue;
+      accountOrder.push(a);
+    }
+  }
+  const eligible = accountOrder.filter(isUnderDailyLimit);
+  if (eligible.length === 0) {
     return NextResponse.json({
-      error: `Cuenta ${account.email} alcanzó su daily limit (${dailyLimit}/${dailyLimit})`,
-      hint: "Espera a mañana o asigna otra cuenta a esta campaña.",
+      error: `Todas las cuentas asignadas alcanzaron su daily limit hoy`,
+      hint: "Espera a mañana o asigna más cuentas a esta campaña.",
     }, { status: 400 });
   }
 
-  // RATE LIMIT (gap 6-9 min) — IGNORADO en envío manual.
-  // El botón "Enviar ahora" salta esta espera porque el usuario quiere envío
-  // inmediato. Solo el daily limit se mantiene para no quemar la cuenta.
-  // El gap se RE-APLICA tras este envío para que el worker automático respete
-  // el rate limit en los próximos envíos a otros leads.
-
-  // ── Renderizar y enviar ──
+  // ── Renderizar ──
   const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
   let bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
 
-  // FALLBACK: si la variante elegida quedó vacía tras render (variables sin
-  // valor en este lead), busca otra variante del mismo step que SÍ tenga
-  // contenido tras render. Solo bloqueamos si NINGUNA renderiza con texto.
   function trimAll(s: string): string {
     return s.replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, "").trim();
   }
+  // Fallback a otra variante si la elegida quedó vacía tras render
   if (!trimAll(bodyHtml)) {
     for (const v of step.variants) {
       if (v.id === variant.id) continue;
       const candidate = renderTemplate(v.body || "", lead.variables, { seed: lead.id });
-      if (trimAll(candidate)) {
-        bodyHtml = candidate;
-        // No reemplazamos `variant` para que el log siga atribuyendo al pick
-        // determinista original — solo usamos el body de la otra variante.
-        break;
-      }
+      if (trimAll(candidate)) { bodyHtml = candidate; break; }
     }
   }
 
-  // Check final — solo bloquea si TRAS fallback sigue vacío de texto real.
-  const hasText = trimAll(bodyHtml).length > 0;
   if (!subjectRaw.trim()) {
     return NextResponse.json({
       error: `El step ${stepIdx + 1} variante ${variant.label} no tiene SUBJECT`,
       hint: "Edita la campaña → Sequences → Step " + (stepIdx + 1) + " y rellena el subject"
     }, { status: 400 });
   }
-  if (!hasText) {
-    // Extrae qué variables usa el body (todas las variantes del step)
+  if (!trimAll(bodyHtml)) {
     const varsInBody = new Set<string>();
     for (const v of step.variants) {
       const re = /\{\{\s*([a-zA-Z0-9_]+)/g;
@@ -198,202 +182,230 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
     const leadVarsSet = new Set(Object.keys(lead.variables || {}));
     const missing = Array.from(varsInBody).filter((v) => !leadVarsSet.has(v) || !(lead.variables[v] || "").trim());
-
     return NextResponse.json({
       error: `Faltan variables en este lead`,
       hint: missing.length > 0
-        ? `Tu mensaje usa: ${Array.from(varsInBody).map((v) => `{{${v}}}`).join(", ")}. Faltan rellenar: ${missing.map((v) => `{{${v}}}`).join(", ")}. Pulsa "Editar lead" para añadirlas.`
-        : `El body de la variante está literalmente vacío. Edita la campaña → Sequences → Step ${stepIdx + 1}.`,
-      debug: {
-        step: stepIdx + 1,
-        variant_picked: variant.label,
-        variables_used_in_body: Array.from(varsInBody),
-        variables_in_lead: Object.keys(lead.variables || {}),
-        variables_missing: missing,
-        all_variants: step.variants.map((v) => ({
-          label: v.label,
-          subject_len: (v.subject || "").length,
-          body_len: (v.body || "").length,
-          rendered_len: renderTemplate(v.body || "", lead.variables, { seed: lead.id }).length,
-        })),
-      },
-      action: "edit_lead", // hint para el frontend
+        ? `Tu mensaje usa: ${Array.from(varsInBody).map((v) => `{{${v}}}`).join(", ")}. Faltan: ${missing.map((v) => `{{${v}}}`).join(", ")}.`
+        : `El body de la variante está literalmente vacío.`,
+      action: "edit_lead",
       missing_variables: missing,
     }, { status: 400 });
   }
 
-  const isFirstStep = stepIdx === 0 || !lead.last_message_id;
+  // Threading
   const inReplyTo = isFirstStep ? "" : normalizeMsgId(lead.last_message_id || "");
   const referencesArr = isFirstStep
     ? []
     : (lead.thread_references || []).concat(inReplyTo ? [inReplyTo] : []).filter(Boolean);
   const subjectOut = isFirstStep ? subjectRaw : ensureRe(lead.thread_subject || subjectRaw);
-
-  const transporter = nodemailer.createTransport({
-    host: account.smtp_host,
-    port: account.smtp_port,
-    secure: account.smtp_secure,
-    auth: { user: account.smtp_user, pass: cleanPass(account.smtp_password) },
-    connectionTimeout: 10000, greetingTimeout: 8000, socketTimeout: 15000,
-    family: 4, tls: { rejectUnauthorized: false },
-    name: "onepulso.online",
-  });
-
-  const fromName = account.display_name
-    || [account.first_name, account.last_name].filter(Boolean).join(" ")
-    || account.email.split("@")[0];
-
-  const newMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${account.email.split("@")[1] || "onepulso.local"}>`;
-
-  const headers: Record<string, string> = {
-    "X-OnePulso-Campaign": campaign.id,
-    "X-OnePulso-Lead": lead.id,
-    "X-OnePulso-Variant": variant.id,
-    "X-OnePulso-Step": String(stepIdx + 1),
-    "X-OnePulso-Manual": "1", // marca manual
-  };
-  if (campaign.options.insert_unsubscribe_header) {
-    headers["List-Unsubscribe"] = `<mailto:${account.email}?subject=Unsubscribe>`;
-    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
-  }
-
   const textBody = bodyHtml.replace(/<[^>]+>/g, "");
   const useTextOnly = campaign.options.text_only_all || (campaign.options.text_only_first && isFirstStep);
   const htmlOut = useTextOnly
     ? undefined
     : `<div style="font-family:-apple-system,sans-serif;font-size:14px;line-height:1.55;color:#0a0d14;white-space:pre-wrap">${bodyHtml.replace(/\n/g, "<br>")}</div>`;
 
-  const t0 = Date.now();
-  try {
-    const info = await transporter.sendMail({
-      from: `"${fromName}" <${account.email}>`,
-      to: lead.email,
-      subject: subjectOut,
-      text: textBody,
-      html: htmlOut,
-      cc: campaign.options.cc || undefined,
-      bcc: campaign.options.bcc || undefined,
-      headers,
-      messageId: newMessageId,
-      inReplyTo: inReplyTo || undefined,
-      references: referencesArr.length > 0 ? referencesArr.join(" ") : undefined,
+  // ── BUCLE: prueba cada cuenta hasta que una mande ──
+  const attempts: Array<{ account: string; error: string }> = [];
+  for (const tryAccount of eligible) {
+    const t0 = Date.now();
+    const transporter = nodemailer.createTransport({
+      host: tryAccount.smtp_host,
+      port: tryAccount.smtp_port,
+      secure: tryAccount.smtp_secure,
+      auth: { user: tryAccount.smtp_user, pass: cleanPass(tryAccount.smtp_password) },
+      connectionTimeout: 10000, greetingTimeout: 8000, socketTimeout: 15000,
+      family: 4, tls: { rejectUnauthorized: false },
+      name: "onepulso.online",
     });
+    const fromName = tryAccount.display_name
+      || [tryAccount.first_name, tryAccount.last_name].filter(Boolean).join(" ")
+      || tryAccount.email.split("@")[0];
+    const newMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${tryAccount.email.split("@")[1] || "onepulso.local"}>`;
+    const headers: Record<string, string> = {
+      "X-OnePulso-Campaign": campaign.id,
+      "X-OnePulso-Lead": lead.id,
+      "X-OnePulso-Variant": variant.id,
+      "X-OnePulso-Step": String(stepIdx + 1),
+      "X-OnePulso-Manual": "1",
+    };
+    if (campaign.options.insert_unsubscribe_header) {
+      headers["List-Unsubscribe"] = `<mailto:${tryAccount.email}?subject=Unsubscribe>`;
+      headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+    }
 
-    // APPEND a Sent (best-effort)
-    let appendResult: { ok: boolean; folder?: string } = { ok: false };
     try {
-      const mime = [
-        `From: "${fromName}" <${account.email}>`,
-        `To: ${lead.email}`,
-        `Subject: ${subjectOut}`,
-        `Message-ID: ${newMessageId}`,
-        inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
-        referencesArr.length > 0 ? `References: ${referencesArr.join(" ")}` : "",
-        `Date: ${new Date().toUTCString()}`,
-        `Content-Type: text/plain; charset=utf-8`,
-        ``,
-        textBody,
-        ``,
-      ].filter(Boolean).join("\r\n");
-      appendResult = await appendToSent(account, mime);
-    } catch {}
-
-    const ms = Date.now() - t0;
-    const nowIso = new Date().toISOString();
-
-    // Actualizar lead
-    const leadIdx = leads.findIndex((l) => l.id === leadId);
-    if (leadIdx >= 0) {
-      const isFinalStep = stepIdx + 1 >= campaign.steps.length;
-      leads[leadIdx] = {
-        ...lead,
-        status: isFinalStep ? "completed" : "active",
-        current_step: stepIdx + 1,
-        last_contacted_at: nowIso,
-        first_contacted_at: lead.first_contacted_at || (isFirstStep ? nowIso : null),
-        last_event: `manual send step ${stepIdx + 1} variant ${variant.label}`,
-        sticky_account_id: lead.sticky_account_id || account.id,
-        finished_reason: isFinalStep ? "completed_sequence" : null,
-        thread_subject: lead.thread_subject || subjectRaw,
-        last_message_id: info.messageId || newMessageId,
-        thread_references: [...(lead.thread_references || []), info.messageId || newMessageId],
-      };
-      await writeLeads(id, leads);
-    }
-
-    // Actualizar cuenta (rate limit + daily)
-    const tz = campaign.schedule.timezone || "Europe/Madrid";
-    const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-    const gapMinutes = (campaign.options.min_gap_minutes ?? 6) + Math.random() * (campaign.options.random_gap_minutes ?? 3);
-    const freshAcc = await getEmailAccount(account.id);
-    if (freshAcc) {
-      await upsertEmailAccount({
-        ...freshAcc,
-        sent_today: (freshAcc.sent_today ?? 0) + 1,
-        sent_today_date: today,
-        last_send_at: nowIso,
-        next_eligible_at: new Date(Date.now() + gapMinutes * 60_000).toISOString(),
+      const info = await transporter.sendMail({
+        from: `"${fromName}" <${tryAccount.email}>`,
+        to: lead.email,
+        subject: subjectOut,
+        text: textBody,
+        html: htmlOut,
+        cc: campaign.options.cc || undefined,
+        bcc: campaign.options.bcc || undefined,
+        headers,
+        messageId: newMessageId,
+        inReplyTo: inReplyTo || undefined,
+        references: referencesArr.length > 0 ? referencesArr.join(" ") : undefined,
       });
+
+      // === ÉXITO ===
+      try { transporter.close(); } catch {}
+      let appendResult: { ok: boolean; folder?: string } = { ok: false };
+      try {
+        const mime = [
+          `From: "${fromName}" <${tryAccount.email}>`,
+          `To: ${lead.email}`,
+          `Subject: ${subjectOut}`,
+          `Message-ID: ${newMessageId}`,
+          inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
+          referencesArr.length > 0 ? `References: ${referencesArr.join(" ")}` : "",
+          `Date: ${new Date().toUTCString()}`,
+          `Content-Type: text/plain; charset=utf-8`,
+          ``,
+          textBody,
+          ``,
+        ].filter(Boolean).join("\r\n");
+        appendResult = await appendToSent(tryAccount, mime);
+      } catch {}
+
+      const ms = Date.now() - t0;
+      const nowIso = new Date().toISOString();
+
+      // Actualizar lead
+      const leadIdx = leads.findIndex((l) => l.id === leadId);
+      if (leadIdx >= 0) {
+        const isFinalStep = stepIdx + 1 >= campaign.steps.length;
+        leads[leadIdx] = {
+          ...lead,
+          status: isFinalStep ? "completed" : "active",
+          current_step: stepIdx + 1,
+          last_contacted_at: nowIso,
+          first_contacted_at: lead.first_contacted_at || (isFirstStep ? nowIso : null),
+          last_event: `manual send step ${stepIdx + 1} variant ${variant.label}`,
+          sticky_account_id: lead.sticky_account_id || tryAccount.id,
+          finished_reason: isFinalStep ? "completed_sequence" : null,
+          thread_subject: lead.thread_subject || subjectRaw,
+          last_message_id: info.messageId || newMessageId,
+          thread_references: [...(lead.thread_references || []), info.messageId || newMessageId],
+        };
+        await writeLeads(id, leads);
+      }
+
+      // Actualizar cuenta (sent_today + gap normal para próximos envíos)
+      const tz = campaign.schedule.timezone || "Europe/Madrid";
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+      const gapMinutes = (campaign.options.min_gap_minutes ?? 6) + Math.random() * (campaign.options.random_gap_minutes ?? 3);
+      const freshAcc = await getEmailAccount(tryAccount.id);
+      if (freshAcc) {
+        await upsertEmailAccount({
+          ...freshAcc,
+          sent_today: (freshAcc.sent_today ?? 0) + 1,
+          sent_today_date: today,
+          last_send_at: nowIso,
+          next_eligible_at: new Date(Date.now() + gapMinutes * 60_000).toISOString(),
+        });
+      }
+
+      await logSentMessage({
+        type: "campaign",
+        account_id: tryAccount.id,
+        account_email: tryAccount.email,
+        to_address: lead.email,
+        subject: subjectOut,
+        body: textBody,
+        message_id: info.messageId || newMessageId,
+        in_reply_to: inReplyTo || undefined,
+        references: referencesArr,
+        campaign_id: id,
+        campaign_step: stepIdx + 1,
+        campaign_variant: variant.label,
+        lead_id: lead.id,
+        lead_email: lead.email,
+        ok: true,
+        appended_to_sent: appendResult.ok,
+        sent_folder: appendResult.folder,
+        ms,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        ms,
+        step_sent: stepIdx + 1,
+        next_step: stepIdx + 2 <= campaign.steps.length ? stepIdx + 2 : null,
+        account: tryAccount.email,
+        message_id: info.messageId || newMessageId,
+        appended_to_sent: appendResult.ok,
+        attempts_failed: attempts,  // si rotamos por algún fallo previo
+        lead_status: leads[leads.findIndex((l) => l.id === leadId)]?.status,
+      });
+    } catch (e: any) {
+      try { transporter.close(); } catch {}
+      const ms = Date.now() - t0;
+      const errMsg = `${e.code ? e.code + ": " : ""}${e.message}`;
+      attempts.push({ account: tryAccount.email, error: errMsg });
+
+      // Log el fallo en email-sent
+      await logSentMessage({
+        type: "campaign",
+        account_id: tryAccount.id,
+        account_email: tryAccount.email,
+        to_address: lead.email,
+        subject: subjectOut,
+        body: textBody,
+        campaign_id: id,
+        campaign_step: stepIdx + 1,
+        campaign_variant: variant.label,
+        lead_id: lead.id,
+        lead_email: lead.email,
+        ok: false,
+        error: errMsg,
+        ms,
+      });
+
+      // ¿Es error de rate limit del servidor (IONOS)?
+      if (isServerRateLimitError(e)) {
+        // Cooldown 30 min en esa cuenta
+        const fresh = await getEmailAccount(tryAccount.id);
+        if (fresh) {
+          await upsertEmailAccount({
+            ...fresh,
+            next_eligible_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+            last_smtp_error: `Rate limit del servidor — cooldown 30min`,
+          });
+        }
+
+        // Si NO es step 1, no podemos rotar (sticky obligatoria para threading)
+        if (!isFirstStep) {
+          return NextResponse.json({
+            ok: false,
+            error: `La cuenta ${tryAccount.email} fue rate-limited por su servidor SMTP.`,
+            hint: `Es step ${stepIdx + 1} (follow-up) — para preservar el threading, este lead solo puede enviarse desde su cuenta original. Espera ~30 min y reintenta.`,
+            attempts_failed: attempts,
+            account: tryAccount.email,
+            server_error: errMsg,
+          }, { status: 503 });
+        }
+        // En step 1, sigue probando la siguiente cuenta
+        continue;
+      }
+
+      // Errores no relacionados con rate limit (bounce 5xx, dns, etc.):
+      // no merecen probar otras cuentas — el problema es del destinatario.
+      return NextResponse.json({
+        ok: false,
+        error: errMsg,
+        ms,
+        attempts_failed: attempts,
+      }, { status: 500 });
     }
-
-    // Log persistente
-    await logSentMessage({
-      type: "campaign",
-      account_id: account.id,
-      account_email: account.email,
-      to_address: lead.email,
-      subject: subjectOut,
-      body: textBody,
-      message_id: info.messageId || newMessageId,
-      in_reply_to: inReplyTo || undefined,
-      references: referencesArr,
-      campaign_id: id,
-      campaign_step: stepIdx + 1,
-      campaign_variant: variant.label,
-      lead_id: lead.id,
-      lead_email: lead.email,
-      ok: true,
-      appended_to_sent: appendResult.ok,
-      sent_folder: appendResult.folder,
-      ms,
-    });
-
-    return NextResponse.json({
-      ok: true,
-      ms,
-      step_sent: stepIdx + 1,
-      next_step: stepIdx + 2 <= campaign.steps.length ? stepIdx + 2 : null,
-      account: account.email,
-      message_id: info.messageId || newMessageId,
-      appended_to_sent: appendResult.ok,
-      lead_status: leads[leads.findIndex((l) => l.id === leadId)]?.status,
-    });
-  } catch (e: any) {
-    const ms = Date.now() - t0;
-    // Log fallo
-    await logSentMessage({
-      type: "campaign",
-      account_id: account.id,
-      account_email: account.email,
-      to_address: lead.email,
-      subject: subjectOut,
-      body: textBody,
-      campaign_id: id,
-      campaign_step: stepIdx + 1,
-      campaign_variant: variant.label,
-      lead_id: lead.id,
-      lead_email: lead.email,
-      ok: false,
-      error: e.message,
-      ms,
-    });
-
-    return NextResponse.json({
-      ok: false,
-      error: `${e.code ? e.code + ": " : ""}${e.message}`,
-      ms,
-    }, { status: 500 });
-  } finally {
-    try { transporter.close(); } catch {}
   }
+
+  // Si llegamos aquí, ninguna cuenta funcionó
+  return NextResponse.json({
+    ok: false,
+    error: "Ninguna de las cuentas asignadas pudo enviar el email.",
+    hint: "Todas devolvieron rate limit del servidor (IONOS está limitando). Espera ~30 min y reintenta.",
+    attempts_failed: attempts,
+    accounts_tried: eligible.length,
+  }, { status: 503 });
 }
