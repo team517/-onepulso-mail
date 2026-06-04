@@ -385,8 +385,17 @@ async function sendOne(
   }
 }
 
-/** Procesa UNA campaña: hace 0..N envíos según rate-limits. */
-async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) {
+/** Procesa UNA campaña: hace 0..N envíos según rate-limits.
+ *  `recentlySent` es un Set MUTABLE de emails (lowercase) que ya recibieron
+ *  un envío en este workspace en las últimas 24h. Se usa para evitar que
+ *  el mismo lead reciba 2+ emails si está en varias campañas. El worker
+ *  AÑADE a este set cada envío hecho en este tick, así que las siguientes
+ *  campañas del mismo tick también respetan el dedupe. */
+async function processCampaign(
+  campaign: Campaign,
+  allAccounts: EmailAccount[],
+  recentlySent: Set<string>,
+) {
   const now = new Date();
   if (!inSchedule(now, campaign.schedule)) {
     return; // fuera de horario → nada
@@ -414,21 +423,33 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
   // Blocklist global — saltamos cualquier lead bloqueado.
   const blocklist = await listBlocklist();
 
-  // Leads candidatos
+  // Leads candidatos — con DEDUPE estricto:
+  //  1) cross-campaign: si ya se mandó hoy a este email desde OTRA campaña
+  //     del workspace, saltamos (recentlySent contiene esos).
+  //  2) intra-tick: si dentro del MISMO array de leads hay dos entries con el
+  //     mismo email (caso raro pero posible si addLeadsBulk fue burlado),
+  //     solo procesamos el primero.
   const candidates: { lead: Lead; step: Step; stepIdx: number; variant: Variant }[] = [];
+  const seenInTick = new Set<string>();
   for (const lead of leads) {
     if (["bounced", "replied", "unsubscribed", "completed", "paused"].includes(lead.status)) continue;
+    const emailLower = (lead.email || "").toLowerCase();
     if (isBlocked(lead.email, blocklist)) {
       lead.status = "unsubscribed";
       lead.finished_reason = "blocklist";
       continue;
     }
+    // Dedupe intra-tick: si ya hay otro lead con el mismo email en candidates → skip
+    if (seenInTick.has(emailLower)) continue;
+    // Dedupe cross-campaign: si recibió un email en las últimas 24h en este workspace → skip
+    if (recentlySent.has(emailLower)) continue;
     const stepIdx = lead.current_step;
     if (stepIdx >= campaign.steps.length) continue;
     const step = campaign.steps[stepIdx];
     if (nextSendTime(lead, step) > now) continue;
     const variant = pickVariant(step, lead.id);
     candidates.push({ lead, step, stepIdx, variant });
+    seenInTick.add(emailLower);
   }
   if (candidates.length === 0) {
     await writeLeads(campaign.id, leads);
@@ -616,6 +637,10 @@ async function processCampaign(campaign: Campaign, allAccounts: EmailAccount[]) 
         campaign.metrics.completed = (campaign.metrics.completed || 0) + 1;
       }
 
+      // Añadir email al set de "ya enviados" → evita que la siguiente campaña
+      // del MISMO tick le envíe otra vez al mismo lead.
+      recentlySent.add(target.lead.email.toLowerCase());
+
       // ── Estado de la cuenta — PERSISTIDO en EmailAccount (sobrevive a restart)
       accState.sent_today += 1;
       accState.last_send_at = nowIso;
@@ -745,11 +770,29 @@ async function tickWorkspace() {
     const campaigns = await listCampaigns();
     const active = campaigns.filter((c) => c.status === "active");
 
+    // ── Cross-campaign dedupe: lista de emails que YA recibieron un envío
+    // en este workspace en las últimas 24h. Cualquier campaña que intente
+    // re-enviar al mismo email lo salta. Se va mutando dentro de cada
+    // processCampaign tras cada envío exitoso → secuenciales en el tick
+    // también respetan el dedupe.
+    const recentlySent = new Set<string>();
+    try {
+      const { listSent } = await import("./email-sent-log");
+      const allSent = await listSent();
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      for (const s of allSent) {
+        if (!s.ok) continue;
+        if (s.type !== "campaign") continue;
+        if (new Date(s.sent_at).getTime() < cutoff) continue;
+        recentlySent.add((s.to_address || "").toLowerCase());
+      }
+    } catch {}
+
     for (const c of active) {
       const fresh = await getCampaign(c.id);
       if (!fresh || fresh.status !== "active") continue;
       try {
-        await processCampaign(fresh, accounts);
+        await processCampaign(fresh, accounts, recentlySent);
       } catch (e: any) {
         log({ level: "error", message: `Excepción procesando campaña: ${e.message}`, campaign_id: c.id, campaign_name: c.name });
       }
