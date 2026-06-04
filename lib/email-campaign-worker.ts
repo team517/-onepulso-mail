@@ -845,11 +845,26 @@ async function syncWorkspaceInbox() {
   try {
     const accounts = await listEmailAccounts();
     if (accounts.length === 0) return;
-    const inboxResults = await syncAllInboxes(accounts, 5); // concurrencia 5 (antes 3)
+    const t0 = Date.now();
+    const inboxResults = await syncAllInboxes(accounts, 5); // concurrencia 5
+    const elapsed = Math.round((Date.now() - t0) / 1000);
     const totalNew = inboxResults.reduce((s, r) => s + r.new_count, 0);
     const totalFiltered = inboxResults.reduce((s, r) => s + r.warmup_filtered + r.bounce_filtered, 0);
+    const okAccounts = inboxResults.filter((r) => r.ok).length;
+    const errAccounts = inboxResults.length - okAccounts;
+
+    // Heartbeat: SIEMPRE loguea el sync para que el usuario vea actividad.
+    // Si hay novedades destacamos. Si no, log corto de "alive".
     if (totalNew > 0 || totalFiltered > 0) {
-      log({ level: "info", message: `Sync IMAP: +${totalNew} nuevos, ${totalFiltered} filtrados` });
+      log({
+        level: "info",
+        message: `🔄 Sync IMAP: ${okAccounts}/${inboxResults.length} cuentas · +${totalNew} nuevos, ${totalFiltered} filtrados · ${elapsed}s`,
+      });
+    } else {
+      log({
+        level: "info",
+        message: `🔄 Sync IMAP: ${okAccounts}/${inboxResults.length} cuentas revisadas · 0 nuevos · ${elapsed}s${errAccounts > 0 ? ` · ${errAccounts} con error` : ""}`,
+      });
     }
     if (totalNew > 0) {
       try {

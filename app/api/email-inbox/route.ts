@@ -68,8 +68,50 @@ export async function GET(req: NextRequest) {
   // Ordena por fecha desc
   all.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
-  const total = all.length;
-  const sliced = all.slice(offset, offset + limit).map((m) => ({
+  // ── DEDUPE de "broadcasts" (mismo remitente envía a varias de TUS cuentas) ──
+  // Si un mismo from + mismo subject (sin "Re:") llega a varias de nuestras
+  // cuentas en el mismo día, son la MISMA conversación lógica. Mostramos solo
+  // la más reciente y agregamos las otras cuentas en `also_received_by`.
+  //
+  // Esto resuelve el caso: alguien hace reply-all a 5 de tus cuentas que le
+  // mandaste cold email → no quieres ver 5 mensajes idénticos en el Unibox.
+  const stripRe = (s: string) => (s || "").replace(/^(?:\s*re\s*:\s*)+/i, "").trim();
+  const dedupKey = (m: any) => {
+    const from = (m.from_address || "").toLowerCase();
+    const subj = stripRe(m.subject || "").toLowerCase();
+    const day = (m.date || "").slice(0, 10);  // YYYY-MM-DD
+    return `${from}::${subj}::${day}`;
+  };
+
+  const grouped = new Map<string, { primary: any; others: { account_id: string; account_email: string; message_id: string }[] }>();
+  for (const m of all) {
+    const key = dedupKey(m);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, { primary: m, others: [] });
+    } else {
+      // El mensaje más reciente queda como primary (ya ordenado por fecha desc,
+      // así que el primero en grouped es siempre el más reciente).
+      existing.others.push({
+        account_id: m.account_id,
+        account_email: m.account_email,
+        message_id: m.message_id,
+      });
+    }
+  }
+
+  const deduped = Array.from(grouped.values()).map(({ primary, others }) => ({
+    ...primary,
+    also_received_by: others,    // array vacío si no hay duplicados
+    received_count: 1 + others.length,
+  }));
+
+  // Re-ordena por fecha desc tras el dedupe (Map preserva insertion order pero
+  // por seguridad)
+  deduped.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const total = deduped.length;
+  const sliced = deduped.slice(offset, offset + limit).map((m) => ({
     ...m,
     // No exponemos text/html completos en la lista (solo en el detail GET)
     text: undefined,

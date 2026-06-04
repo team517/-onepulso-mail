@@ -578,8 +578,23 @@ export default function BandejasPage() {
                       <div style={{ fontSize: 12, color: INK_4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {head.preview || "(sin contenido)"}
                       </div>
-                      <div style={{ fontSize: 10.5, color: INK_5, marginTop: 4, fontFamily: FONT_MONO }}>
-                        → {head.account_email}
+                      <div style={{ fontSize: 10.5, color: INK_5, marginTop: 4, fontFamily: FONT_MONO, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>→ {head.account_email}</span>
+                        {(head as any).received_count > 1 && (
+                          <span
+                            style={{
+                              background: "rgba(154,105,245,0.10)",
+                              color: PURPLE_DEEP,
+                              padding: "1px 6px",
+                              borderRadius: 6,
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}
+                            title={`También recibido en: ${(head as any).also_received_by?.map((x: any) => x.account_email).join(", ") || ""}`}
+                          >
+                            +{(head as any).received_count - 1} cuenta{(head as any).received_count > 2 ? "s" : ""}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
