@@ -37,15 +37,39 @@ async function loadLeadEmailsForCurrentWorkspace(): Promise<Set<string>> {
   }
 }
 
-/** Sincroniza una sola cuenta — descarga últimos 200 mensajes de INBOX. */
+/** Detecta el path de la carpeta Spam/Junk del proveedor. */
+async function findSpamFolder(client: ImapFlow): Promise<string | null> {
+  try {
+    const list = (await client.list()) as any[];
+    // Por specialUse (más fiable)
+    for (const m of list) {
+      if (m.specialUse === "\\Junk") return m.path;
+    }
+    // Por nombre en varios idiomas
+    for (const m of list) {
+      if (/\b(spam|junk|junk\s?mail|junk\s?e-?mail|correo\s?no\s?deseado|spam\s?folder)\b/i.test(m.path || "")) {
+        return m.path;
+      }
+    }
+    // Gmail-specific
+    if (list.some((m) => m.path?.startsWith("[Gmail]"))) return "[Gmail]/Spam";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sincroniza una sola cuenta — descarga últimos 200 mensajes de INBOX + 100 de Spam. */
 export async function syncInboxForAccount(account: EmailAccount): Promise<{
   account_id: string;
   account_email: string;
   ok: boolean;
   new_count: number;
+  new_count_spam: number;
   warmup_filtered: number;
   bounce_filtered: number;
   total_in_inbox: number;
+  total_in_spam: number;
   ms: number;
   error?: string;
 }> {
@@ -65,7 +89,10 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
   const result = {
     account_id: account.id,
     account_email: account.email,
-    ok: false, new_count: 0, warmup_filtered: 0, bounce_filtered: 0, total_in_inbox: 0, ms: 0, error: undefined as string | undefined,
+    ok: false, new_count: 0, new_count_spam: 0,
+    warmup_filtered: 0, bounce_filtered: 0,
+    total_in_inbox: 0, total_in_spam: 0,
+    ms: 0, error: undefined as string | undefined,
   };
 
   // Cargar emails de leads del workspace ANTES del sync para que ningún
@@ -165,6 +192,8 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
             thread_id: computeThreadId(inReplyTo, references, messageId),
             is_warmup: warmup,
             is_bounce: bounce,
+            folder: "INBOX",
+            from_spam: false,
           });
         } catch {
           // Mensaje malformado: lo saltamos sin abortar el sync entero
@@ -192,13 +221,106 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
         return m;
       });
 
-      const merged = [...fresh, ...reclassified];
+      // ── SCAN DE SPAM/JUNK (después de procesar INBOX, ANTES del lock release)
+      // Liberamos lock del INBOX y abrimos el de Spam.
+      let spamFresh: InboxMessage[] = [];
+      try { lock.release(); } catch {}
 
-      // Dedupe por (account_id + uid + message_id) — preserva starred/user_read
+      const existingByMsgId = new Set(existing.map((m) => m.message_id).filter(Boolean));
+      try {
+        const spamPath = await findSpamFolder(client);
+        if (spamPath) {
+          const spamLock = await client.getMailboxLock(spamPath);
+          try {
+            const spamStatus = await client.status(spamPath, { messages: true });
+            const spamTotal = spamStatus.messages || 0;
+            result.total_in_spam = spamTotal;
+            if (spamTotal > 0) {
+              const spamStart = Math.max(1, spamTotal - 99);  // últimos 100 de Spam
+              const spamRange = `${spamStart}:*`;
+              for await (const msg of client.fetch(spamRange, { envelope: true, source: true, uid: true, flags: true })) {
+                if (!msg.source) continue;
+                try {
+                  const parsed = await simpleParser(msg.source);
+                  const subject = parsed.subject || (msg.envelope as any)?.subject || "(sin asunto)";
+                  const text = parsed.text || "";
+                  const html = (parsed.html as string) || "";
+                  const fromAddress = parsed.from?.value?.[0]?.address || (msg.envelope as any)?.from?.[0]?.address || "";
+                  const fromName = parsed.from?.value?.[0]?.name || (msg.envelope as any)?.from?.[0]?.name || "";
+                  const toAddress = parsed.to ? (Array.isArray(parsed.to) ? parsed.to[0]?.value?.[0]?.address : parsed.to.value?.[0]?.address) : account.email;
+
+                  let messageId = parsed.messageId || (msg.envelope as any)?.messageId || "";
+                  if (messageId && !messageId.startsWith("<")) messageId = `<${messageId}>`;
+
+                  // Skip si ya está en BD (entonces ya lo procesamos como INBOX o Spam previamente)
+                  if (messageId && existingByMsgId.has(messageId)) continue;
+
+                  const isFromLead = leadEmails.has((fromAddress || "").toLowerCase());
+
+                  let inReplyTo = parsed.inReplyTo || (msg.envelope as any)?.inReplyTo || "";
+                  if (inReplyTo && !inReplyTo.startsWith("<")) inReplyTo = `<${inReplyTo}>`;
+                  const references = parsed.references
+                    ? (Array.isArray(parsed.references) ? parsed.references : [parsed.references])
+                    : [];
+                  const date = (parsed.date || (msg.envelope as any)?.date || new Date()).toISOString?.() || new Date().toISOString();
+                  const preview = (text || html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim().slice(0, 180);
+
+                  // Spam: aplicamos los MISMOS filtros warmup/bounce que INBOX.
+                  // Si es de un lead → bypass de filtros (siempre visible).
+                  const warmup = isFromLead ? false : isWarmupMessage({ subject, text, html, from: fromAddress, fromName });
+                  const bounce = isFromLead ? false : isBounceOrFailure({ from: fromAddress, fromAddress, fromName, subject, text });
+                  if (warmup) result.warmup_filtered++;
+                  if (bounce) result.bounce_filtered++;
+
+                  spamFresh.push({
+                    id: newMessageId(),
+                    uid: msg.uid,
+                    account_id: account.id,
+                    account_email: account.email,
+                    message_id: messageId,
+                    in_reply_to: inReplyTo || undefined,
+                    references,
+                    from_address: fromAddress,
+                    from_name: fromName,
+                    to_address: toAddress || account.email,
+                    subject,
+                    date,
+                    preview,
+                    text: text.slice(0, 50000),
+                    html: html.slice(0, 100000),
+                    flags: Array.isArray(msg.flags) ? msg.flags : [],
+                    thread_id: computeThreadId(inReplyTo, references, messageId),
+                    is_warmup: warmup,
+                    is_bounce: bounce,
+                    folder: spamPath,
+                    from_spam: true,  // ← badge especial en UI
+                  });
+                } catch {
+                  // mensaje malformado, salta
+                }
+              }
+              result.new_count_spam = spamFresh.length;
+            }
+          } finally {
+            try { spamLock.release(); } catch {}
+          }
+        }
+      } catch (e: any) {
+        // No abortamos si Spam falla — el INBOX ya está procesado.
+        // Solo registramos en el error message del result si nada más falló.
+        if (!result.error) result.error = `Spam scan: ${e.message}`;
+      }
+
+      const merged = [...fresh, ...reclassified, ...spamFresh];
+
+      // Dedupe por message_id PRIMERO (más fiable que UID porque UID
+      // depende del folder), luego por (account_id + uid + folder)
       const seen = new Set<string>();
       const deduped: InboxMessage[] = [];
       for (const m of merged) {
-        const key = `${m.account_id}:${m.uid}:${m.message_id}`;
+        const key = m.message_id
+          ? `${m.account_id}:mid:${m.message_id}`
+          : `${m.account_id}:fld:${m.folder || "INBOX"}:uid:${m.uid}`;
         if (seen.has(key)) continue;
         seen.add(key);
         deduped.push(m);
@@ -214,6 +336,8 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
       });
       result.ok = true;
     } finally {
+      // lock del INBOX ya se libera dentro (antes de scan de Spam).
+      // Como defensa por si algo falló antes de release:
       try { lock.release(); } catch {}
       try { await client.logout(); } catch {}
     }

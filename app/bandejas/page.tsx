@@ -608,6 +608,23 @@ export default function BandejasPage() {
                             🤖 AUTO
                           </span>
                         )}
+                        {(head as any).from_spam && (
+                          <span
+                            style={{
+                              background: "rgba(255,51,68,0.10)",
+                              color: DANGER,
+                              padding: "2px 7px",
+                              borderRadius: 6,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              whiteSpace: "nowrap",
+                              flexShrink: 0,
+                            }}
+                            title="Este mensaje fue clasificado como Spam por tu servidor — lo hemos recuperado al sync"
+                          >
+                            📨 SPAM
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: 12, color: INK_4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {head.preview || "(sin contenido)"}

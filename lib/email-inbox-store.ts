@@ -39,6 +39,10 @@ export type InboxMessage = {
   starred?: boolean;
   /** marcado leído manualmente desde la UI (independiente del flag IMAP) */
   user_read?: boolean;
+  /** Folder IMAP de origen — "INBOX" o "Spam"/"Junk"/etc. */
+  folder?: string;
+  /** true si vino de Spam folder (badge especial en UI) */
+  from_spam?: boolean;
 };
 
 export type InboxMeta = {
