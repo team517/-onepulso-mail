@@ -283,8 +283,15 @@ async function sendOne(
 ): Promise<{ ok: boolean; error?: string; message_id?: string; thread_subject?: string; references?: string[]; appended?: boolean; sent_folder?: string }> {
   const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
   const bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
-  if (!subjectRaw.trim() || !bodyHtml.trim()) {
-    return { ok: false, error: "Variante con subject o body vacío" };
+  // Strip HTML + entities + whitespace para detectar bodies "vacíos" que
+  // técnicamente tienen contenido pero no representan un mensaje real.
+  const bodyPlain = bodyHtml
+    .replace(/<[^>]+>/g, "")
+    .replace(/&[a-z]+;/gi, "")
+    .replace(/\s+/g, "")
+    .trim();
+  if (!subjectRaw.trim() || !bodyPlain) {
+    return { ok: false, error: `Step ${stepIdx + 1} variante ${variant.label}: subject o body vacío` };
   }
 
   // ── Threading: step 0 abre hilo. Step 1+ → Re: + In-Reply-To + References

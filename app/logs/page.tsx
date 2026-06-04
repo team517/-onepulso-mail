@@ -52,6 +52,8 @@ export default function LogsPage() {
   const [filter, setFilter] = useState<"all" | "send" | "error" | "info" | "warn">("all");
   const [search, setSearch] = useState("");
   const [paused, setPaused] = useState(false);
+  // Cuando es no-null, muestra el modal con el detalle del envío.
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -282,19 +284,173 @@ export default function LogsPage() {
           ) : (
             <div>
               {filtered.map((e) => (
-                <LogRow key={e.id} event={e} count={e.count} firstAt={e.firstAt} />
+                <LogRow
+                  key={e.id}
+                  event={e}
+                  count={e.count}
+                  firstAt={e.firstAt}
+                  onClick={
+                    e.id.startsWith("s-")
+                      ? () => setDetailId(e.id.slice(2))  // quita prefijo "s-"
+                      : undefined
+                  }
+                />
               ))}
             </div>
           )}
         </div>
       </section>
 
+      {detailId && (
+        <SentDetailModal sentId={detailId} onClose={() => setDetailId(null)} />
+      )}
+
       {ToastNode}
     </div>
   );
 }
 
-function LogRow({ event: e, count, firstAt }: { event: any; count?: number; firstAt?: string }) {
+function SentDetailModal({ sentId, onClose }: { sentId: string; onClose: () => void }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`/api/email-sent/${sentId}`)
+      .then((r) => r.json())
+      .then((j) => setData(j.sent))
+      .finally(() => setLoading(false));
+  }, [sentId]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(10,13,20,0.42)",
+        backdropFilter: "blur(4px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 200, padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: PAPER, borderRadius: 18, width: "100%", maxWidth: 760,
+          maxHeight: "88vh", display: "flex", flexDirection: "column",
+          boxShadow: "0 30px 90px rgba(10,13,20,0.22)", overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: "20px 24px", borderBottom: `1px solid ${LINE}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <h2 style={{ margin: 0, fontFamily: FONT_SANS, fontWeight: 700, fontSize: 20, color: INK }}>
+              Detalle del envío
+            </h2>
+            {data && (
+              <div style={{ fontSize: 12, color: INK_4, fontFamily: FONT_MONO, marginTop: 4 }}>
+                {data.type} · {new Date(data.sent_at).toLocaleString("es-ES")}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: 0, fontSize: 22, color: INK_4, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 24, overflow: "auto", flex: 1 }}>
+          {loading ? (
+            <div style={{ color: INK_4 }}>Cargando…</div>
+          ) : !data ? (
+            <div style={{ color: "#c12530" }}>No se encontró el envío</div>
+          ) : (
+            <>
+              {/* Status */}
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "5px 12px", borderRadius: 999,
+                background: data.ok ? "rgba(31,138,91,0.10)" : "rgba(255,51,68,0.08)",
+                color: data.ok ? GREEN : "#c12530",
+                fontSize: 12, fontWeight: 700, marginBottom: 14,
+              }}>
+                {data.ok ? "✓ Enviado correctamente" : "✗ Falló"}
+                {data.ms && <span style={{ color: INK_4, fontWeight: 500 }}>· {data.ms}ms</span>}
+              </div>
+
+              {/* Meta */}
+              <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", gap: "6px 12px", fontSize: 13, marginBottom: 18, color: INK_2 }}>
+                <span style={{ color: INK_4, fontFamily: FONT_MONO }}>De:</span>
+                <span>{data.account_email}</span>
+                <span style={{ color: INK_4, fontFamily: FONT_MONO }}>Para:</span>
+                <span>{data.to_address}</span>
+                {data.campaign_id && (
+                  <>
+                    <span style={{ color: INK_4, fontFamily: FONT_MONO }}>Campaña:</span>
+                    <span><a href={`/email-campaigns/${data.campaign_id}`} style={{ color: PURPLE_DEEP }}>ver campaña →</a></span>
+                  </>
+                )}
+                {data.campaign_step && (
+                  <>
+                    <span style={{ color: INK_4, fontFamily: FONT_MONO }}>Step:</span>
+                    <span>{data.campaign_step}{data.campaign_variant ? ` · variante ${data.campaign_variant}` : ""}</span>
+                  </>
+                )}
+                {data.message_id && (
+                  <>
+                    <span style={{ color: INK_4, fontFamily: FONT_MONO }}>Message-ID:</span>
+                    <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: INK_4 }}>{data.message_id}</span>
+                  </>
+                )}
+                {data.appended_to_sent !== undefined && (
+                  <>
+                    <span style={{ color: INK_4, fontFamily: FONT_MONO }}>Sent IMAP:</span>
+                    <span style={{ color: data.appended_to_sent ? GREEN : INK_4 }}>
+                      {data.appended_to_sent ? `✓ guardado en ${data.sent_folder || "Sent"}` : "no append"}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* Subject */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: INK_4, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+                  Subject
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: INK, fontFamily: FONT_SANS }}>
+                  {data.subject || "(sin subject)"}
+                </div>
+              </div>
+
+              {/* Body */}
+              <div>
+                <div style={{ fontSize: 11, color: INK_4, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+                  Cuerpo del mensaje
+                </div>
+                <div style={{
+                  background: SURF, border: `1px solid ${LINE}`, borderRadius: 10,
+                  padding: "14px 16px", whiteSpace: "pre-wrap",
+                  fontFamily: "-apple-system, sans-serif",
+                  fontSize: 13.5, lineHeight: 1.55, color: INK_2,
+                  maxHeight: 380, overflow: "auto",
+                }}>
+                  {data.body || "(cuerpo vacío)"}
+                </div>
+              </div>
+
+              {/* Error si falló */}
+              {!data.ok && data.error && (
+                <div style={{
+                  marginTop: 16, padding: "12px 14px",
+                  background: "rgba(255,51,68,0.06)", border: "1px solid rgba(255,51,68,0.2)",
+                  borderRadius: 10, color: "#c12530", fontSize: 13, fontFamily: FONT_MONO,
+                }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Error:</div>
+                  {data.error}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LogRow({ event: e, count, firstAt, onClick }: { event: any; count?: number; firstAt?: string; onClick?: () => void }) {
   const map: Record<string, { color: string; bg: string; label: string; icon: string }> = {
     send:  { color: GREEN, bg: "rgba(31,138,91,0.10)", label: "SEND", icon: "✉" },
     info:  { color: BLUE, bg: "rgba(5,102,234,0.10)", label: "INFO", icon: "ⓘ" },
@@ -307,14 +463,21 @@ function LogRow({ event: e, count, firstAt }: { event: any; count?: number; firs
   const isGrouped = (count || 1) > 1;
 
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "auto 80px 1fr auto",
-      gap: 12, alignItems: "center",
-      padding: "10px 16px",
-      borderTop: `1px solid ${LINE}`,
-      fontSize: 12.5,
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "auto 80px 1fr auto",
+        gap: 12, alignItems: "center",
+        padding: "10px 16px",
+        borderTop: `1px solid ${LINE}`,
+        fontSize: 12.5,
+        cursor: onClick ? "pointer" : "default",
+        transition: "background .12s",
+      }}
+      onMouseEnter={(ev) => { if (onClick) (ev.currentTarget as HTMLElement).style.background = "rgba(154,105,245,0.05)"; }}
+      onMouseLeave={(ev) => { if (onClick) (ev.currentTarget as HTMLElement).style.background = "transparent"; }}
+    >
       <span style={{
         width: 22, height: 22, borderRadius: "50%",
         background: c.bg, color: c.color,

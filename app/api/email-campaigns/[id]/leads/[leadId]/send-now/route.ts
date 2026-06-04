@@ -161,8 +161,32 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   // ── Renderizar y enviar ──
   const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
   const bodyHtml = renderTemplate(variant.body || "", lead.variables, { seed: lead.id });
-  if (!subjectRaw.trim() || !bodyHtml.trim()) {
-    return NextResponse.json({ error: "Variante con subject o body vacío" }, { status: 400 });
+  // Detección robusta de cuerpo vacío: strip HTML + entidades + whitespace.
+  // Esto detecta cuerpos que son solo <br>, &nbsp; o variables sin valor.
+  const bodyPlain = bodyHtml
+    .replace(/<[^>]+>/g, "")     // tags HTML
+    .replace(/&[a-z]+;/gi, "")   // entidades HTML &nbsp; &amp; etc.
+    .replace(/\s+/g, "")         // todo whitespace
+    .trim();
+  if (!subjectRaw.trim()) {
+    return NextResponse.json({
+      error: `El step ${stepIdx + 1} variante ${variant.label} no tiene SUBJECT`,
+      hint: "Edita la campaña → Sequences → Step " + (stepIdx + 1) + " y rellena el subject"
+    }, { status: 400 });
+  }
+  if (!bodyPlain) {
+    return NextResponse.json({
+      error: `El step ${stepIdx + 1} variante ${variant.label} no tiene CUERPO de mensaje`,
+      hint: `Edita la campaña → Sequences → Step ${stepIdx + 1} y rellena el body. Tu variante actual ${variant.body ? "solo contiene HTML vacío o variables sin valor" : "está completamente vacía"}.`,
+      debug: {
+        step: stepIdx + 1,
+        variant: variant.label,
+        variant_subject_length: (variant.subject || "").length,
+        variant_body_length: (variant.body || "").length,
+        rendered_body_length: bodyHtml.length,
+        rendered_body_preview: bodyHtml.slice(0, 100),
+      }
+    }, { status: 400 });
   }
 
   const isFirstStep = stepIdx === 0 || !lead.last_message_id;
