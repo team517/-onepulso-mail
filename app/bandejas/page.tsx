@@ -572,8 +572,42 @@ export default function BandejasPage() {
                           {new Date(head.date).toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                         </span>
                       </div>
-                      <div style={{ fontSize: 13, fontWeight: anyUnread ? 600 : 500, color: anyUnread ? INK : INK_2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 2 }}>
-                        {head.subject || "(sin asunto)"}
+                      <div style={{ fontSize: 13, fontWeight: anyUnread ? 600 : 500, color: anyUnread ? INK : INK_2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 2, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{head.subject || "(sin asunto)"}</span>
+                        {(head as any).is_lead_reply && (
+                          <span
+                            style={{
+                              background: "rgba(31,138,91,0.10)",
+                              color: GREEN,
+                              padding: "2px 7px",
+                              borderRadius: 6,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              whiteSpace: "nowrap",
+                              flexShrink: 0,
+                            }}
+                            title={`Lead de campaña: ${(head as any).lead_campaign_name || "—"} · estado: ${(head as any).lead_status || "—"}`}
+                          >
+                            🎯 LEAD
+                          </span>
+                        )}
+                        {(head as any).is_auto_reply && (
+                          <span
+                            style={{
+                              background: "rgba(249,166,3,0.10)",
+                              color: "#b97500",
+                              padding: "2px 7px",
+                              borderRadius: 6,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              whiteSpace: "nowrap",
+                              flexShrink: 0,
+                            }}
+                            title="Respuesta automática (out-of-office, baja, etc.)"
+                          >
+                            🤖 AUTO
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: 12, color: INK_4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {head.preview || "(sin contenido)"}

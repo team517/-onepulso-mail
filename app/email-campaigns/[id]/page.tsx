@@ -343,8 +343,198 @@ function OverviewTab({ campaign }: { campaign: Campaign }) {
       {/* Performance por variante — A/B testing dashboard */}
       <VariantStats campaignId={campaign.id} />
 
+      {/* Auditoría de envíos: ¿se han enviado todos correctamente? */}
+      <SendAudit campaignId={campaign.id} />
+
       {/* Activity log — timeline de eventos */}
       <ActivityLog campaignId={campaign.id} />
+    </div>
+  );
+}
+
+/** Dashboard de auditoría: confirma que los envíos se hicieron correctamente. */
+function SendAudit({ campaignId }: { campaignId: string }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const r = await fetch(`/api/email-campaigns/${campaignId}/send-audit`);
+        const j = await r.json();
+        if (alive) { setData(j); setLoading(false); }
+      } catch { if (alive) setLoading(false); }
+    }
+    load();
+    const h = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(h); };
+  }, [campaignId]);
+
+  if (loading) return <div style={{ ...cardStyle, marginTop: 18, color: INK_4 }}>Cargando auditoría…</div>;
+  if (!data?.ok) return null;
+
+  const s = data.summary;
+  const successPct = s.success_rate.toFixed(1);
+  const healthOk = s.total_sends_failed === 0 && s.stuck_count === 0 && s.idle_accounts_count < s.assigned_accounts_count;
+
+  return (
+    <div style={{ ...cardStyle, marginTop: 18 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 14 }}>
+        <h3 style={cardTitle}>
+          Auditoría de envíos
+          {healthOk ? (
+            <span style={{ marginLeft: 10, fontSize: 12, color: GREEN, fontWeight: 700 }}>· ✓ TODO OK</span>
+          ) : (
+            <span style={{ marginLeft: 10, fontSize: 12, color: ORANGE, fontWeight: 700 }}>· ⚠ REVISAR</span>
+          )}
+        </h3>
+        <span style={{ fontSize: 11.5, color: INK_4, fontFamily: FONT_MONO }}>auto-refresh 60s</span>
+      </div>
+
+      {/* Stats grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+        <AuditStat label="Envíos intentados" value={s.total_sends_attempted} color={INK} />
+        <AuditStat label="Enviados OK" value={s.total_sends_ok} sub={`${successPct}%`} color={GREEN} />
+        <AuditStat label="Fallaron" value={s.total_sends_failed} color={s.total_sends_failed > 0 ? DANGER : INK_4} />
+        <AuditStat label="Replied" value={s.replied} color={GREEN} />
+        <AuditStat label="Bounced" value={s.bounced} color={s.bounced > 0 ? DANGER : INK_4} />
+        <AuditStat label="Unsubs" value={s.unsubscribed} color={INK_4} />
+        <AuditStat label="Atascados" value={s.stuck_count} color={s.stuck_count > 0 ? ORANGE : INK_4} />
+        <AuditStat label="Cuentas idle" value={`${s.idle_accounts_count}/${s.assigned_accounts_count}`} color={s.idle_accounts_count > 0 ? ORANGE : INK_4} />
+      </div>
+
+      {/* Step distribution */}
+      <div style={{ marginBottom: 16 }}>
+        <h4 style={{ margin: "0 0 8px", fontFamily: FONT_SANS, fontSize: 13, fontWeight: 700, color: INK_3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          Distribución por step
+        </h4>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {Object.entries(data.step_distribution).filter(([_, v]) => (v as number) > 0).map(([k, v]) => (
+            <span key={k} style={{
+              padding: "5px 11px", background: SURF, border: `1px solid ${LINE}`, borderRadius: 8,
+              fontSize: 12.5, color: INK_2, fontFamily: FONT_MONO,
+            }}>
+              {k.replace("_", " ")}: <strong style={{ color: INK }}>{v as number}</strong>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-account */}
+      {data.sent_by_account.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <h4 style={{ margin: "0 0 8px", fontFamily: FONT_SANS, fontSize: 13, fontWeight: 700, color: INK_3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Envíos por cuenta
+          </h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {data.sent_by_account.sort((a: any, b: any) => b.total - a.total).map((acc: any) => (
+              <div key={acc.account_id} style={{
+                display: "grid", gridTemplateColumns: "1fr auto auto auto",
+                gap: 12, alignItems: "center",
+                padding: "8px 12px", background: SURF, borderRadius: 8,
+                fontSize: 12.5,
+              }}>
+                <span style={{ fontFamily: FONT_MONO, color: INK_2 }}>{acc.email}</span>
+                <span style={{ fontFamily: FONT_MONO, color: INK }}><strong>{acc.total}</strong> total</span>
+                <span style={{ fontFamily: FONT_MONO, color: GREEN }}>{acc.ok} ✓</span>
+                {acc.failed > 0 && <span style={{ fontFamily: FONT_MONO, color: DANGER }}>{acc.failed} ✗</span>}
+                {acc.failed === 0 && <span style={{ fontFamily: FONT_MONO, color: INK_4 }}>0 ✗</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cuentas idle (sin envíos) */}
+      {data.idle_accounts.length > 0 && (
+        <div style={{
+          padding: "10px 14px", background: "rgba(249,166,3,0.06)",
+          border: "1px solid rgba(249,166,3,0.2)", borderRadius: 10, marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#b97500", marginBottom: 4 }}>
+            ⚠ {data.idle_accounts.length} cuenta{data.idle_accounts.length > 1 ? "s" : ""} asignada{data.idle_accounts.length > 1 ? "s" : ""} sin envíos:
+          </div>
+          <div style={{ fontSize: 12, color: INK_3, fontFamily: FONT_MONO }}>
+            {data.idle_accounts.map((a: any) => `${a.email} (SMTP ${a.smtp_ok ? "✓" : "✗"})`).join(" · ")}
+          </div>
+        </div>
+      )}
+
+      {/* Toggle ver errores y atascados */}
+      {(data.recent_errors.length > 0 || data.stuck_leads.length > 0) && (
+        <button onClick={() => setExpanded((v) => !v)} style={{ ...ghostBtn, height: 32, fontSize: 12.5, width: "100%" }}>
+          {expanded ? "Ocultar detalles de errores y atascados" : `Ver detalles: ${data.recent_errors.length} errores, ${data.stuck_leads.length} atascados`}
+        </button>
+      )}
+
+      {expanded && (
+        <>
+          {data.recent_errors.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <h4 style={{ margin: "0 0 8px", fontFamily: FONT_SANS, fontSize: 13, fontWeight: 700, color: DANGER }}>
+                Errores recientes (top 50)
+              </h4>
+              <div style={{ maxHeight: 260, overflowY: "auto", background: PAPER, border: `1px solid ${LINE}`, borderRadius: 8 }}>
+                <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+                  <thead style={{ background: SURF, position: "sticky", top: 0 }}>
+                    <tr>
+                      <th style={{ ...th, padding: "6px 10px", fontSize: 10.5 }}>Hora</th>
+                      <th style={{ ...th, padding: "6px 10px", fontSize: 10.5 }}>Destinatario</th>
+                      <th style={{ ...th, padding: "6px 10px", fontSize: 10.5 }}>Cuenta</th>
+                      <th style={{ ...th, padding: "6px 10px", fontSize: 10.5 }}>Step</th>
+                      <th style={{ ...th, padding: "6px 10px", fontSize: 10.5 }}>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recent_errors.map((e: any, i: number) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${LINE}` }}>
+                        <td style={{ padding: "4px 10px", color: INK_4, fontFamily: FONT_MONO }}>{new Date(e.sent_at).toLocaleTimeString("es-ES")}</td>
+                        <td style={{ padding: "4px 10px", color: INK_2, fontFamily: FONT_MONO }}>{e.to}</td>
+                        <td style={{ padding: "4px 10px", color: INK_4, fontFamily: FONT_MONO }}>{e.account}</td>
+                        <td style={{ padding: "4px 10px", color: INK_4 }}>{e.step}</td>
+                        <td style={{ padding: "4px 10px", color: DANGER, fontSize: 11 }}>{(e.error || "").slice(0, 60)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {data.stuck_leads.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <h4 style={{ margin: "0 0 8px", fontFamily: FONT_SANS, fontSize: 13, fontWeight: 700, color: ORANGE }}>
+                Leads atascados ({data.stuck_leads.length})
+              </h4>
+              <p style={{ fontSize: 12, color: INK_3, margin: "0 0 8px" }}>
+                Estos leads deberían haber recibido su próximo step hace más de 24h pero no lo recibieron. Probablemente su sticky account está rate-limited o tiene algún error.
+              </p>
+              <div style={{ maxHeight: 200, overflowY: "auto", background: PAPER, border: `1px solid ${LINE}`, borderRadius: 8 }}>
+                {data.stuck_leads.map((s: any, i: number) => (
+                  <div key={i} style={{ padding: "6px 12px", borderTop: i > 0 ? `1px solid ${LINE}` : 0, fontSize: 12 }}>
+                    <span style={{ fontFamily: FONT_MONO, color: INK_2 }}>{s.email}</span>
+                    <span style={{ marginLeft: 8, color: INK_4 }}>step {s.current_step}{s.last_event ? ` · ${s.last_event}` : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AuditStat({ label, value, sub, color }: { label: string; value: any; sub?: string; color: string }) {
+  return (
+    <div style={{
+      padding: "10px 12px", background: SURF, border: `1px solid ${LINE}`, borderRadius: 10,
+    }}>
+      <div style={{ fontSize: 10.5, color: INK_4, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</div>
+      <div style={{ fontFamily: FONT_MONO, fontWeight: 800, fontSize: 22, color, marginTop: 4, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color, fontFamily: FONT_MONO, fontWeight: 600, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
