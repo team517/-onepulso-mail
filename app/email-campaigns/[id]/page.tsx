@@ -1793,7 +1793,8 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
     const stepNum = lead.current_step + 1;
     const ok = confirm(
       `¿Enviar AHORA el step ${stepNum} de ${campaign.steps.length} a ${lead.email}?\n\n` +
-      `Salta el delay (ignora "espera N días entre steps") pero respeta el rate limit de la cuenta y el daily limit.`
+      `Envío inmediato: salta el delay entre steps Y el rate limit de 6-9 min.\n` +
+      `Solo respeta el daily limit (para no quemar la cuenta).`
     );
     if (!ok) return;
 

@@ -141,22 +141,21 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "No hay cuenta disponible para enviar" }, { status: 400 });
   }
 
-  // Check daily limit
+  // Check daily limit (esto SÍ se respeta — proteger la cuenta de spam)
   const campaignDailyLimit = campaign.options.daily_limit_per_account ?? 30;
   const dailyLimit = Math.min(getEffectiveDailyLimit(account), campaignDailyLimit);
   if ((account.sent_today ?? 0) >= dailyLimit) {
     return NextResponse.json({
       error: `Cuenta ${account.email} alcanzó su daily limit (${dailyLimit}/${dailyLimit})`,
+      hint: "Espera a mañana o asigna otra cuenta a esta campaña.",
     }, { status: 400 });
   }
 
-  // Check rate limit (gap 6-9 min)
-  if (account.next_eligible_at && new Date(account.next_eligible_at) > new Date()) {
-    const waitMin = Math.ceil((new Date(account.next_eligible_at).getTime() - Date.now()) / 60_000);
-    return NextResponse.json({
-      error: `Cuenta ${account.email} está en rate limit — disponible en ${waitMin} min`,
-    }, { status: 400 });
-  }
+  // RATE LIMIT (gap 6-9 min) — IGNORADO en envío manual.
+  // El botón "Enviar ahora" salta esta espera porque el usuario quiere envío
+  // inmediato. Solo el daily limit se mantiene para no quemar la cuenta.
+  // El gap se RE-APLICA tras este envío para que el worker automático respete
+  // el rate limit en los próximos envíos a otros leads.
 
   // ── Renderizar y enviar ──
   const subjectRaw = renderTemplate(variant.subject || "(sin asunto)", lead.variables, { seed: lead.id });
