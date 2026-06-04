@@ -225,6 +225,10 @@ export default function ConnectAccountsPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  // Paginación: muestra solo N cuentas a la vez. NO afecta a la selección
+  // ni a los envíos — todas las cuentas siguen activas, solo renderizamos N.
+  const [visibleCount, setVisibleCount] = useState(5);
+  useEffect(() => { setVisibleCount(5); }, [activeTag]); // reset al cambiar tag
   const [newTag, setNewTag] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [verifying, setVerifying] = useState<Set<string>>(new Set());
@@ -635,7 +639,7 @@ export default function ConnectAccountsPage() {
           />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {filtered.map((a) => (
+            {filtered.slice(0, visibleCount).map((a) => (
               <AccountCard
                 key={a.id}
                 account={a}
@@ -653,6 +657,38 @@ export default function ConnectAccountsPage() {
                 onRemoveTag={(t) => removeTagFromAccount(a.id, t)}
               />
             ))}
+
+            {/* Paginación: muestra de 5 en 5 sin recargar nada */}
+            {visibleCount < filtered.length && (
+              <div style={{
+                padding: "14px 20px",
+                background: PAPER,
+                border: `1px solid ${LINE}`,
+                borderRadius: 14,
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+              }}>
+                <div style={{ fontSize: 13, color: INK_3, fontFamily: FONT_MONO }}>
+                  Mostrando <strong style={{ color: INK }}>{visibleCount}</strong> de <strong style={{ color: INK }}>{filtered.length}</strong>
+                  {selected.size > 0 && (
+                    <> · <strong style={{ color: PURPLE_DEEP }}>{selected.size}</strong> seleccionada{selected.size === 1 ? "" : "s"}</>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => setVisibleCount((c) => Math.min(c + 5, filtered.length))}
+                    style={ghostBtn}
+                  >
+                    + Mostrar 5 más
+                  </button>
+                  <button
+                    onClick={() => setVisibleCount(filtered.length)}
+                    style={ghostBtn}
+                  >
+                    Ver todas ({filtered.length})
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>

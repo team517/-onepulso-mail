@@ -3563,6 +3563,11 @@ function AccountsTab({ campaign, setCampaign, toast }: { campaign: Campaign; set
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  /** Cuántas cuentas mostrar en la lista. Se carga de 5 en 5 para no
+   *  petar el render cuando hay 50+ cuentas. NO afecta a las
+   *  seleccionadas — todas las marcadas (de cualquier "página") siguen
+   *  participando en los envíos. */
+  const [visibleCount, setVisibleCount] = useState(5);
 
   async function load() {
     setLoading(true);
@@ -3585,6 +3590,14 @@ function AccountsTab({ campaign, setCampaign, toast }: { campaign: Campaign; set
     if (tagFilter && !(a.tags || []).includes(tagFilter)) return false;
     return true;
   });
+
+  // Resetea la paginación si cambia el search o filter (sin scroll fantasma).
+  useEffect(() => {
+    setVisibleCount(5);
+  }, [search, tagFilter]);
+
+  const visibleFiltered = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
 
   // Las cuentas EFECTIVAMENTE asignadas = account_ids explícitos ∪ por tag.
   const selectedIds = new Set(campaign.account_ids);
@@ -3720,7 +3733,7 @@ function AccountsTab({ campaign, setCampaign, toast }: { campaign: Campaign; set
         </div>
       ) : (
         <div style={{ background: PAPER, border: `1px solid ${LINE}`, borderRadius: 14, overflow: "hidden" }}>
-          {filtered.map((a, i) => {
+          {visibleFiltered.map((a, i) => {
             const byId = selectedIds.has(a.id);
             const byTag = !byId && (a.tags || []).some((t) => selectedTags.has(t));
             const active = byId || byTag;
@@ -3792,6 +3805,35 @@ function AccountsTab({ campaign, setCampaign, toast }: { campaign: Campaign; set
             </div>
             );
           })}
+
+          {/* Paginación: mostrar 5 más */}
+          {hasMore && (
+            <div style={{
+              padding: "12px 18px",
+              borderTop: `1px solid ${LINE}`,
+              background: SURF,
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+            }}>
+              <div style={{ fontSize: 12, color: INK_4, fontFamily: FONT_MONO }}>
+                Mostrando {visibleFiltered.length} de {filtered.length} ·
+                {" "}<strong style={{ color: INK_2 }}>{selectedIds.size + (selectedTags.size > 0 ? effective.length - selectedIds.size : 0)}</strong> seleccionadas en total
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => setVisibleCount((c) => Math.min(c + 5, filtered.length))}
+                  style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}
+                >
+                  + Mostrar 5 más
+                </button>
+                <button
+                  onClick={() => setVisibleCount(filtered.length)}
+                  style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}
+                >
+                  Ver todas ({filtered.length})
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
