@@ -110,19 +110,59 @@ export default function LogsPage() {
         variant: e.variant,
       });
     });
+    /** Clasifica el error SMTP en una categoría reconocible. */
+    function classifyError(err: string): { icon: string; label: string; clean: string } {
+      const e = (err || "").toLowerCase();
+      if (/\b(450|421|451|429)\b|mail\s*send\s*limit|too\s*many|rate\s*limit|throttl|mailbox\s*unavailable/i.test(e)) {
+        return { icon: "🚫", label: "IONOS rate limit", clean: "El servidor IONOS bloqueó temporalmente esta cuenta" };
+      }
+      if (/\b550\b|user\s*unknown|user\s*does\s*not\s*exist|no\s*such\s*user|address\s*not\s*found/i.test(e)) {
+        return { icon: "💔", label: "Bounce permanente", clean: "El destinatario no existe (550)" };
+      }
+      if (/\b552\b|mailbox\s*(is\s*)?full|over\s*quota/i.test(e)) {
+        return { icon: "📦", label: "Buzón lleno", clean: "El buzón del destinatario está lleno (552)" };
+      }
+      if (/eauth|535|authentication\s*failed/i.test(e)) {
+        return { icon: "🔐", label: "Auth fallida", clean: "Password incorrecta o credencial expirada" };
+      }
+      if (/etimedout|econnreset|econnrefused|enotfound/i.test(e)) {
+        return { icon: "🌐", label: "Error de red", clean: "Problema de conexión con el servidor SMTP" };
+      }
+      if (/blocked\s*by|blacklist|spam|reputation/i.test(e)) {
+        return { icon: "🚷", label: "IP en blacklist", clean: "Reputación del servidor degradada" };
+      }
+      // Default: muestra los primeros 100 chars del error
+      return { icon: "⚠", label: "Error SMTP", clean: (err || "").slice(0, 100) };
+    }
+
     // Sent log (cada envío también aparece como "send" en el timeline global)
     sent.forEach((s) => {
-      arr.push({
-        id: `s-${s.id}`,
-        at: s.sent_at,
-        level: s.ok ? "send" : "error",
-        message: s.ok ? `Email enviado · ${s.type}` : `Fallo de envío · ${s.type}: ${s.error || ""}`,
-        campaign_id: s.campaign_id,
-        lead_email: s.lead_email || s.to_address,
-        account_email: s.account_email,
-        step: s.campaign_step,
-        subject: s.subject,
-      });
+      if (s.ok) {
+        arr.push({
+          id: `s-${s.id}`,
+          at: s.sent_at,
+          level: "send",
+          message: `Email enviado · ${s.type}`,
+          campaign_id: s.campaign_id,
+          lead_email: s.lead_email || s.to_address,
+          account_email: s.account_email,
+          step: s.campaign_step,
+          subject: s.subject,
+        });
+      } else {
+        const c = classifyError(s.error || "");
+        arr.push({
+          id: `s-${s.id}`,
+          at: s.sent_at,
+          level: "error",
+          message: `${c.icon} ${c.label} · ${c.clean}`,
+          campaign_id: s.campaign_id,
+          lead_email: s.lead_email || s.to_address,
+          account_email: s.account_email,
+          step: s.campaign_step,
+          subject: s.subject,
+        });
+      }
     });
     arr.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
     return arr;

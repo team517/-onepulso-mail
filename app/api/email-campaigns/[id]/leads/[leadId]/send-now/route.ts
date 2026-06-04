@@ -155,7 +155,6 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
   const eligible = accountOrder.filter((a) => isUnderDailyLimit(a) && !isInLongCooldown(a));
   if (eligible.length === 0) {
-    // Detalla por qué cada cuenta fue excluida
     const cooldownDetails = accountOrder
       .filter(isInLongCooldown)
       .map((a) => ({
@@ -164,6 +163,27 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         last_error: a.last_smtp_error || "rate limit del servidor",
       }));
     const dailyExceeded = accountOrder.filter((a) => !isUnderDailyLimit(a)).map((a) => a.email);
+
+    // Log el bloqueo en email-sent para que aparezca en /logs
+    const blockMsg = cooldownDetails.length > 0
+      ? `BLOQUEADO: ${cooldownDetails.length} cuenta(s) en cooldown IONOS — ${cooldownDetails.map((c) => `${c.email}(${c.cooldown_remaining_min}min)`).join(", ")}`
+      : `BLOQUEADO: ${dailyExceeded.length} cuenta(s) alcanzaron daily limit`;
+    try {
+      await logSentMessage({
+        type: "campaign",
+        account_id: accountOrder[0]?.id || "",
+        account_email: accountOrder[0]?.email || "(ninguna disponible)",
+        to_address: lead.email,
+        subject: `(manual bloqueado) step ${stepIdx + 1}`,
+        body: "Manual send-now bloqueado: ninguna cuenta disponible",
+        campaign_id: id,
+        campaign_step: stepIdx + 1,
+        lead_id: lead.id,
+        lead_email: lead.email,
+        ok: false,
+        error: blockMsg,
+      });
+    } catch {}
 
     return NextResponse.json({
       error: `Ninguna cuenta disponible para enviar AHORA`,
