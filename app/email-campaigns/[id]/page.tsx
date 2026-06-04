@@ -1784,6 +1784,41 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
   }
   useEffect(() => { load(); }, [debouncedSearch, statusFilter]);
 
+  // Map leadId → "sending" durante el envío manual
+  const [sendingNow, setSendingNow] = useState<Set<string>>(new Set());
+
+  async function sendNow(lead: Lead) {
+    const stepNum = lead.current_step + 1;
+    const ok = confirm(
+      `¿Enviar AHORA el step ${stepNum} de ${campaign.steps.length} a ${lead.email}?\n\n` +
+      `Salta el delay (ignora "espera N días entre steps") pero respeta el rate limit de la cuenta y el daily limit.`
+    );
+    if (!ok) return;
+
+    setSendingNow((prev) => { const s = new Set(prev); s.add(lead.id); return s; });
+    try {
+      const r = await fetch(`/api/email-campaigns/${campaign.id}/leads/${lead.id}/send-now`, { method: "POST" });
+      const j = await r.json();
+      if (r.ok && j.ok) {
+        toast(`✓ Step ${j.step_sent} enviado desde ${j.account}`);
+        // Optimistic update del lead
+        setLeads((arr) => arr.map((l) => l.id === lead.id ? {
+          ...l,
+          current_step: j.step_sent,
+          last_contacted_at: new Date().toISOString(),
+          status: j.lead_status || l.status,
+          last_event: `manual send step ${j.step_sent}`,
+        } : l));
+      } else {
+        toast(`✗ ${j.error || "Error al enviar"}${j.hint ? ` — ${j.hint}` : ""}`);
+      }
+    } catch (e: any) {
+      toast(`✗ ${e.message || "Error de red"}`);
+    } finally {
+      setSendingNow((prev) => { const s = new Set(prev); s.delete(lead.id); return s; });
+    }
+  }
+
   async function removeSelected() {
     if (selected.size === 0) return;
     if (!confirm(`¿Eliminar ${selected.size} lead(s)?`)) return;
@@ -1956,6 +1991,7 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
                 <th style={th}>Step</th>
                 <th style={th}>Sticky account</th>
                 <th style={th}>Añadido</th>
+                <th style={{ ...th, textAlign: "right" }}>Acción</th>
               </tr>
             </thead>
             <tbody>
@@ -1990,6 +2026,35 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
                   </td>
                   <td style={{ ...td, color: INK_4, fontSize: 12 }}>
                     {new Date(l.added_at).toLocaleDateString("es-ES")}
+                  </td>
+                  <td style={{ ...td, textAlign: "right" }}>
+                    {["new", "active"].includes(l.status) && l.current_step < campaign.steps.length && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); sendNow(l); }}
+                        disabled={sendingNow.has(l.id)}
+                        style={{
+                          ...ghostBtn,
+                          height: 26,
+                          padding: "0 10px",
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          opacity: sendingNow.has(l.id) ? 0.55 : 1,
+                          cursor: sendingNow.has(l.id) ? "wait" : "pointer",
+                        }}
+                        title={`Envía AHORA el step ${l.current_step + 1} bypasando el delay (respeta rate limit de la cuenta)`}
+                      >
+                        {sendingNow.has(l.id) ? (
+                          "Enviando…"
+                        ) : (
+                          <>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                            Enviar ahora
+                          </>
+                        )}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
