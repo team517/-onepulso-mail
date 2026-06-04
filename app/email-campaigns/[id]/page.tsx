@@ -1564,6 +1564,7 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<Lead["status"] | "all">("all");
   const [showUpload, setShowUpload] = useState(false);
+  const [showAddManual, setShowAddManual] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   // Debounce de búsqueda para no spamear el server cada keystroke
@@ -1698,6 +1699,10 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
               onDeleteByStatus={removeByStatus}
             />
           )}
+          <button onClick={() => setShowAddManual(true)} style={ghostBtn}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Añadir lead
+          </button>
           <button onClick={() => setShowUpload(true)} style={brandBtn}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             Subir CSV
@@ -1823,7 +1828,221 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
           toast={toast}
         />
       )}
+
+      {showAddManual && (
+        <AddLeadManualModal
+          campaignId={campaign.id}
+          campaign={campaign}
+          onClose={() => setShowAddManual(false)}
+          onAdded={(updatedVars, newTotal) => {
+            setShowAddManual(false);
+            setCampaign((prev) => ({
+              ...prev,
+              variables: updatedVars,
+              metrics: prev.metrics
+                ? { ...prev.metrics, total_leads: newTotal, active_leads: newTotal }
+                : prev.metrics,
+            }));
+            load();
+          }}
+          toast={toast}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Modal para añadir UN lead manualmente con email + variables libres.
+ *
+ * Aprovecha las variables ya conocidas de la campaña (campaign.variables)
+ * para sugerir campos. El usuario puede añadir variables nuevas con
+ * el botón "+ Otra variable" — se añadirán a campaign.variables tras
+ * el import (vía el endpoint /leads/chunk que ya hace ese merge).
+ */
+function AddLeadManualModal({ campaignId, campaign, onClose, onAdded, toast }: {
+  campaignId: string;
+  campaign: Campaign;
+  onClose: () => void;
+  onAdded: (updatedVariables: string[], newTotal: number) => void;
+  toast: (s: string) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [vars, setVars] = useState<{ key: string; value: string }[]>(() => {
+    // Pre-rellena con las variables que la campaña ya conoce, vacías
+    const known = (campaign.variables || []).filter((v) => v !== "email");
+    if (known.length === 0) {
+      // Defaults razonables si la campaña no tiene aún variables
+      return [
+        { key: "first_name", value: "" },
+        { key: "last_name", value: "" },
+        { key: "company", value: "" },
+      ];
+    }
+    return known.map((k) => ({ key: k, value: "" }));
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function addVarRow() {
+    setVars((prev) => [...prev, { key: "", value: "" }]);
+  }
+  function removeVarRow(i: number) {
+    setVars((prev) => prev.filter((_, idx) => idx !== i));
+  }
+  function updateVar(i: number, field: "key" | "value", val: string) {
+    setVars((prev) => prev.map((v, idx) => idx === i ? { ...v, [field]: val } : v));
+  }
+
+  const emailLower = email.trim().toLowerCase();
+  const emailValid = /^[a-zA-Z0-9._+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+$/.test(emailLower);
+
+  async function submit() {
+    setError(null);
+    if (!emailValid) {
+      setError("Email inválido");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      // Convierte vars a Record, normalizando keys (slugify simple)
+      const variables: Record<string, string> = {};
+      for (const { key, value } of vars) {
+        const k = key.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+        const v = value.trim();
+        if (k && v) variables[k] = v;
+      }
+
+      // Reusa el endpoint /leads/chunk — mismo flujo que el CSV (dedupe,
+      // skip blocklist, skip otras campañas).
+      const r = await fetch(`/api/email-campaigns/${campaignId}/leads/chunk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leads: [{ email: emailLower, variables }],
+          // Para añadir manual NO saltamos blocklist (lo bloqueamos si lo está)
+          // pero SÍ saltamos duplicados con otras campañas (consistente con CSV)
+          skip_blocklist: true,
+          skip_other_campaigns: true,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setError(j.error || "Error al añadir el lead");
+        return;
+      }
+      if (j.skipped_blocklist > 0) {
+        toast("⚠ Email en blocklist global — no se añadió");
+        return;
+      }
+      if (j.skipped_other_campaigns > 0) {
+        toast("⚠ Email ya está en otra campaña — no se añadió");
+        return;
+      }
+      const added = j.added || 0;
+      const updated = j.updated || 0;
+      toast(added > 0 ? "✓ Lead añadido" : updated > 0 ? "✓ Lead actualizado (ya existía)" : "Sin cambios");
+      onAdded(j.variables || campaign.variables || [], j.total || 0);
+    } catch (e: any) {
+      setError(e.message || "Error de red");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <ModalShell
+      title="Añadir lead manualmente"
+      subtitle="Email obligatorio. Las variables sirven para personalizar el contenido (ej: {{first_name}})."
+      onClose={onClose}
+      width={620}
+      footer={
+        <>
+          <button onClick={onClose} style={ghostBtn} disabled={submitting}>Cancelar</button>
+          <button
+            onClick={submit}
+            disabled={submitting || !emailValid}
+            style={{ ...brandBtn, opacity: submitting || !emailValid ? 0.55 : 1 }}
+          >
+            {submitting ? "Añadiendo…" : "Añadir lead"}
+          </button>
+        </>
+      }
+    >
+      {/* Email */}
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: "block", fontSize: 12, color: INK_3, fontWeight: 600, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          Email *
+        </label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="ana@empresa.com"
+          autoFocus
+          style={inputStyle}
+        />
+        {email && !emailValid && (
+          <div style={{ fontSize: 11.5, color: DANGER, marginTop: 4 }}>Formato de email inválido</div>
+        )}
+      </div>
+
+      {/* Variables */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <label style={{ fontSize: 12, color: INK_3, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Variables (opcional)
+          </label>
+          <button type="button" onClick={addVarRow} style={{ ...ghostBtn, height: 28, fontSize: 12 }}>
+            + Otra variable
+          </button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {vars.map((v, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "180px 1fr auto", gap: 8 }}>
+              <input
+                type="text"
+                value={v.key}
+                onChange={(e) => updateVar(i, "key", e.target.value)}
+                placeholder="first_name"
+                style={{ ...inputStyle, fontFamily: FONT_MONO, fontSize: 13 }}
+              />
+              <input
+                type="text"
+                value={v.value}
+                onChange={(e) => updateVar(i, "value", e.target.value)}
+                placeholder="Ana"
+                style={inputStyle}
+              />
+              <button
+                type="button"
+                onClick={() => removeVarRow(i)}
+                style={{ ...ghostBtn, padding: "0 10px", height: 38, color: INK_4 }}
+                title="Quitar"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <p style={{ marginTop: 10, fontSize: 11.5, color: INK_4 }}>
+          Usa estas variables en tus pasos con <code style={{ background: SURF, padding: "1px 5px", borderRadius: 4, fontFamily: FONT_MONO }}>&#123;&#123;first_name&#125;&#125;</code>.
+          Si dejas valor vacío, se usará el fallback que pongas en el template (ej. <code style={{ background: SURF, padding: "1px 5px", borderRadius: 4, fontFamily: FONT_MONO }}>&#123;&#123;first_name|equipo&#125;&#125;</code>).
+        </p>
+      </div>
+
+      {error && (
+        <div style={{
+          padding: "10px 14px", background: "rgba(255,51,68,0.06)",
+          border: "1px solid rgba(255,51,68,0.2)", borderRadius: 10,
+          color: DANGER, fontSize: 13, marginTop: 12,
+        }}>
+          {error}
+        </div>
+      )}
+    </ModalShell>
   );
 }
 
