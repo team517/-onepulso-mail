@@ -17,6 +17,26 @@ import {
 } from "./email-inbox-store";
 import { EmailAccount } from "./email-accounts";
 
+/**
+ * Carga TODOS los emails de leads del workspace actual.
+ * Se usa para evitar marcar como warmup/bounce mensajes que vienen de un
+ * lead real (que es la respuesta legítima que estás esperando).
+ */
+async function loadLeadEmailsForCurrentWorkspace(): Promise<Set<string>> {
+  try {
+    const { listCampaigns, listLeads } = await import("./email-campaigns");
+    const campaigns = await listCampaigns();
+    const set = new Set<string>();
+    for (const c of campaigns) {
+      const leads = await listLeads(c.id);
+      for (const l of leads) set.add(l.email.toLowerCase());
+    }
+    return set;
+  } catch {
+    return new Set();
+  }
+}
+
 /** Sincroniza una sola cuenta — descarga últimos 200 mensajes de INBOX. */
 export async function syncInboxForAccount(account: EmailAccount): Promise<{
   account_id: string;
@@ -47,6 +67,11 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
     account_email: account.email,
     ok: false, new_count: 0, warmup_filtered: 0, bounce_filtered: 0, total_in_inbox: 0, ms: 0, error: undefined as string | undefined,
   };
+
+  // Cargar emails de leads del workspace ANTES del sync para que ningún
+  // reply real de un lead se marque como warmup/bounce (aunque su nombre
+  // sea "Kim" o "Mark" o lo que sea).
+  const leadEmails = await loadLeadEmailsForCurrentWorkspace();
 
   try {
     await Promise.race([
@@ -88,12 +113,21 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
           const fromName = parsed.from?.value?.[0]?.name || (msg.envelope as any)?.from?.[0]?.name || "";
           const toAddress = parsed.to ? (Array.isArray(parsed.to) ? parsed.to[0]?.value?.[0]?.address : parsed.to.value?.[0]?.address) : account.email;
 
-          // Detección de warmup / bounce — NO descartamos el mensaje, solo lo
-          // marcamos con flag. El API oculta los warmup/bounce por defecto pero
-          // el usuario puede ver "Mostrar warmup" / "Mostrar bounces" si sospecha
-          // de un falso positivo (un email legítimo mal clasificado).
-          const warmup = isWarmupMessage({ subject, text, html, from: fromAddress, fromName });
-          const bounce = isBounceOrFailure({ from: fromAddress, fromAddress, fromName, subject, text });
+          // ¿Es este mensaje una respuesta de un LEAD real del workspace?
+          // Si sí → BYPASS de filtros warmup/bounce. Una respuesta de un lead
+          // SIEMPRE aparece en la bandeja, sin importar nombres genéricos en
+          // la lista de warmup ni patrones que parezcan códigos.
+          const isFromLead = leadEmails.has((fromAddress || "").toLowerCase());
+
+          // Detección de warmup / bounce — solo se aplica si NO viene de un lead.
+          // Si viene de un lead, marcamos warmup=false y bounce=false → aparecen
+          // siempre en la vista "Todos".
+          const warmup = isFromLead
+            ? false
+            : isWarmupMessage({ subject, text, html, from: fromAddress, fromName });
+          const bounce = isFromLead
+            ? false
+            : isBounceOrFailure({ from: fromAddress, fromAddress, fromName, subject, text });
           if (warmup) result.warmup_filtered++;
           if (bounce) result.bounce_filtered++;
 
@@ -140,14 +174,15 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
       result.new_count = fresh.length;
 
       // Reclasifica is_warmup/is_bounce de los mensajes EXISTENTES con la heurística
-      // actual — así cuando endurecemos los filtros, los mensajes viejos también
-      // se filtran sin tener que resincronizar desde IMAP.
+      // actual. Si el mensaje viene de un LEAD del workspace → bypass de filtros
+      // (es una respuesta legítima, debe aparecer siempre).
       const reclassified = existing.map((m) => {
-        const wm = isWarmupMessage({
+        const isFromLead = leadEmails.has((m.from_address || "").toLowerCase());
+        const wm = isFromLead ? false : isWarmupMessage({
           subject: m.subject, text: m.text, html: m.html,
           from: m.from_address, fromName: m.from_name,
         });
-        const bn = isBounceOrFailure({
+        const bn = isFromLead ? false : isBounceOrFailure({
           from: m.from_address, fromAddress: m.from_address,
           fromName: m.from_name, subject: m.subject, text: m.text,
         });
