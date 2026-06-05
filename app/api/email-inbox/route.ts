@@ -72,17 +72,20 @@ export async function GET(req: NextRequest) {
   if (onlyUnread) all = all.filter((m) => !m.flags.includes("\\Seen") && !m.user_read);
 
   // Filtros warmup / bounces:
-  //   · Vista por defecto: oculta warmup + bounces (lo legítimo de un cold email)
+  //   · Vista por defecto ("Todos"): solo oculta WARMUP. Bounces, auto-replies,
+  //     mensajes rescatados del Spam → TODO se muestra. El usuario quiere ver
+  //     todo lo legítimo, no perderse nada.
   //   · only_warmup → solo warmup (auditoría)
-  //   · only_bounces → solo bounces (revisar NDRs)
-  //   · include_* → no filtra (lo ves todo)
+  //   · only_bounces → solo bounces (filtrar para revisar NDRs)
+  //   · include_warmup=1 → incluye también warmup
   if (onlyWarmup) {
     all = all.filter((m) => m.is_warmup);
   } else if (onlyBounces) {
     all = all.filter((m) => m.is_bounce);
   } else {
+    // Por defecto solo ocultamos warmup. Bounces se muestran (son útiles).
     if (!includeWarmup) all = all.filter((m) => !m.is_warmup);
-    if (!includeBounces) all = all.filter((m) => !m.is_bounce);
+    // includeBounces ya no afecta — bounces SIEMPRE se ven por defecto.
   }
 
   // Ordena por fecha desc
