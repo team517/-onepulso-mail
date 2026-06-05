@@ -15,7 +15,7 @@ export function getPool(): Pool | null {
   globalThis.__pgPool = new Pool({
     connectionString: url,
     ssl: url.includes("railway.internal") ? false : { rejectUnauthorized: false },
-    max: 5,
+    max: 15,                       // Antes 5 → ahogaba con polls concurrentes
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });

@@ -245,11 +245,18 @@ async function writeIndex(ids: string[]) {
 
 export async function listCampaigns(): Promise<Campaign[]> {
   const ids = await readIndex();
-  const out: Campaign[] = [];
-  for (const id of ids) {
-    const c = await readJson<Campaign>(await KEY(id));
-    if (c) out.push(c);
-  }
+  if (ids.length === 0) return [];
+
+  // Construye TODAS las keys de una vez (1 sola lectura del cookie/workspace),
+  // luego lee en paralelo todas las campañas. Antes era N reads sequenciales →
+  // ahora 1 read del workspace + N reads paralelos.
+  const { scopedKey } = await import("./workspace");
+  const prefix = await scopedKey("email-campaigns/");
+  const keys = ids.map((id) => `${prefix}${id}`);
+
+  const results = await Promise.all(keys.map((k) => readJson<Campaign>(k)));
+  const out = results.filter((c): c is Campaign => c !== null);
+
   // Más recientes primero
   out.sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
   return out;
