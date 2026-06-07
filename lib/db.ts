@@ -14,7 +14,7 @@ export function getPool(): Pool | null {
   if (globalThis.__pgPool) return globalThis.__pgPool;
   globalThis.__pgPool = new Pool({
     connectionString: url,
-    ssl: url.includes("railway.internal") ? false : { rejectUnauthorized: false },
+    ssl: { rejectUnauthorized: false },
     max: 15,                       // Antes 5 → ahogaba con polls concurrentes
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
@@ -65,3 +65,4 @@ export async function withClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<
 export function isDbEnabled(): boolean {
   return !!process.env.DATABASE_URL;
 }
+
