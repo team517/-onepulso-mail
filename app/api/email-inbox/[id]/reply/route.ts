@@ -21,6 +21,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const replyBody = String(body.body || "").trim();
   if (!replyBody) return NextResponse.json({ error: "Cuerpo vacío" }, { status: 400 });
 
+  // Detección extra: si el body es SOLO la cita del mensaje original (líneas
+  // que empiezan por "> " + el header "El X escribió:"), rechazamos para que
+  // el usuario no envíe sin texto propio.
+  const lines = replyBody.split("\n").map((l) => l.trim()).filter(Boolean);
+  const isAllQuoteOrHeader = lines.every(
+    (l) => l.startsWith(">") || /^el .+ escribió:?$/i.test(l) || /^on .+ wrote:?$/i.test(l),
+  );
+  if (isAllQuoteOrHeader) {
+    return NextResponse.json({
+      error: "El cuerpo es solo la cita del original — escribe tu respuesta arriba",
+    }, { status: 400 });
+  }
+
   // Localiza el mensaje + cuenta
   const accounts = await listEmailAccounts();
   let foundMsg: any = null;

@@ -1144,28 +1144,52 @@ function TypeBadge({ type, large }: { type: SentMessage["type"]; large?: boolean
   );
 }
 
-/** Composer inline para responder al mensaje activo. */
+/** Composer inline para responder al mensaje activo.
+ *  - Empieza VACÍO (no llena con quote del original) para evitar enviar
+ *    sin texto nuevo.
+ *  - Quote opcional con un botón "Citar mensaje original".
+ */
 function ReplyComposer({ message, onCancel, onSent, toast }: {
   message: FullMessage; onCancel: () => void; onSent: () => void; toast: (s: string) => void;
 }) {
   const [bodyText, setBodyText] = useState("");
   const [sending, setSending] = useState(false);
+  const [quoteAdded, setQuoteAdded] = useState(false);
 
-  // Cita el original como bloque al final por defecto (estilo Gmail/Outlook)
+  // Focus el textarea al abrir
   useEffect(() => {
-    const quoted = (message.text || message.preview || "")
-      .split("\n").slice(0, 30).map((l) => `> ${l}`).join("\n");
-    const dateStr = new Date(message.date).toLocaleString("es-ES");
-    setBodyText(`\n\n\nEl ${dateStr}, ${message.from_name || message.from_address} escribió:\n${quoted}`);
-    // Cursor al inicio
     setTimeout(() => {
       const ta = document.getElementById("reply-textarea") as HTMLTextAreaElement | null;
-      if (ta) { ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0; }
+      if (ta) ta.focus();
     }, 50);
   }, [message.id]);
 
+  function addQuote() {
+    if (quoteAdded) return;
+    const quoted = (message.text || message.preview || "")
+      .split("\n").slice(0, 30).map((l) => `> ${l}`).join("\n");
+    const dateStr = new Date(message.date).toLocaleString("es-ES");
+    const block = `\n\n\nEl ${dateStr}, ${message.from_name || message.from_address} escribió:\n${quoted}`;
+    setBodyText((prev) => prev + block);
+    setQuoteAdded(true);
+  }
+
+  /** Calcula si el body tiene contenido REAL del usuario (no solo quote vacía). */
+  function userTypedSomething(): boolean {
+    // Si NO hay quote añadida, cualquier texto vale
+    if (!quoteAdded) return bodyText.trim().length > 0;
+    // Si hay quote, lo que escribió el usuario está ANTES del separador "\n\n\nEl ..."
+    const splitIdx = bodyText.search(/\n\n\nEl .+escribió:/);
+    const userPart = splitIdx === -1 ? bodyText : bodyText.slice(0, splitIdx);
+    return userPart.trim().length > 0;
+  }
+
   async function send() {
     if (!bodyText.trim()) { toast("Escribe algo antes de enviar"); return; }
+    if (!userTypedSomething()) {
+      toast("Solo veo la cita del mensaje original — escribe tu respuesta arriba");
+      return;
+    }
     setSending(true);
     try {
       const r = await fetch(`/api/email-inbox/${message.id}/reply`, {
@@ -1214,6 +1238,14 @@ function ReplyComposer({ message, onCancel, onSent, toast }: {
           )}
         </button>
         <button onClick={onCancel} style={ghostBtn} disabled={sending}>Cancelar</button>
+        <button
+          onClick={addQuote}
+          disabled={sending || quoteAdded}
+          style={{ ...ghostBtn, opacity: quoteAdded ? 0.4 : 1 }}
+          title="Añade el mensaje original citado al final de tu respuesta (estilo Gmail/Outlook)"
+        >
+          {quoteAdded ? "✓ Citado" : "📋 Citar mensaje original"}
+        </button>
         <div style={{ marginLeft: "auto", alignSelf: "center", fontSize: 11.5, color: INK_5, fontFamily: FONT_MONO }}>
           {bodyText.length} caracteres
         </div>
