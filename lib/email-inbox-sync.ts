@@ -371,7 +371,19 @@ export async function syncAllInboxes(accounts: EmailAccount[], concurrency = 5) 
     while (i < syncable.length) {
       const idx = i++;
       const acc = syncable[idx];
-      const r = await syncInboxForAccount(acc);
+      // Timeout global de 60s por cuenta: si el fetch/parse de 300 mensajes se
+      // cuelga, no bloqueamos el pool entero. Devolvemos ok:false y seguimos.
+      const r = await Promise.race([
+        syncInboxForAccount(acc),
+        new Promise<Awaited<ReturnType<typeof syncInboxForAccount>>>((resolve) =>
+          setTimeout(() => resolve({
+            account_id: acc.id, account_email: acc.email, ok: false,
+            new_count: 0, new_count_spam: 0, warmup_filtered: 0, bounce_filtered: 0,
+            total_in_inbox: 0, total_in_spam: 0, ms: 60000,
+            error: "Sync timeout 60s — cuenta saltada este ciclo",
+          }), 60_000),
+        ),
+      ]);
       results[idx] = r;
       // Auto-recovery del flag imap_ok según el resultado del sync real.
       try {

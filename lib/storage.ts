@@ -11,23 +11,38 @@ import path from "path";
 import { getPool, ensureSchema, isDbEnabled, withClient } from "./db";
 import { dataPath } from "./data-dir";
 
+/** Keys de bootstrap que SÍ pueden auto-seedearse desde un archivo bundled.
+ *  NO incluimos keys de workspace (ws/...) ni datos de usuario: auto-seedear
+ *  esos resucitaría datos borrados y cruzaría datos entre entornos. */
+function isAutoSeedable(key: string): boolean {
+  if (key.startsWith("ws/")) return false;       // datos por-workspace → nunca
+  if (key === "users" || key === "settings") return false;
+  if (key.startsWith("email-")) return false;     // datos legacy de email
+  // Solo allowlist explícita de bootstrap (vacía por ahora — nada se auto-seedea)
+  return false;
+}
+
 /** Lee un valor JSON por clave. Devuelve null si no existe. */
 export async function readJson<T = any>(key: string): Promise<T | null> {
   if (isDbEnabled()) {
     await ensureSchema();
     const r = await withClient((c) => c.query<{ value: T }>("SELECT value FROM kv_store WHERE key = $1", [key]));
     if (r.rows[0]) return r.rows[0].value;
-    // Auto-seed: si no está en Postgres pero hay un archivo bundled en el repo,
-    // lo cargamos y lo escribimos a Postgres para futuras lecturas.
-    try {
-      const filePath = keyToPath(key);
-      const raw = await fs.readFile(filePath, "utf-8");
-      const value = JSON.parse(raw) as T;
-      await writeJson(key, value).catch(() => {});
-      return value;
-    } catch {
-      return null;
+    // Auto-seed SOLO para keys de bootstrap explícitas. Para todo lo demás
+    // (workspace, usuarios, email) → null si no está en Postgres. Esto evita
+    // resucitar datos borrados y cruzar datos del filesystem del build.
+    if (isAutoSeedable(key)) {
+      try {
+        const filePath = keyToPath(key);
+        const raw = await fs.readFile(filePath, "utf-8");
+        const value = JSON.parse(raw) as T;
+        await writeJson(key, value).catch(() => {});
+        return value;
+      } catch {
+        return null;
+      }
     }
+    return null;
   }
   // Modo dev: lectura directa de fs
   try {

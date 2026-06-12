@@ -250,24 +250,56 @@ export async function getEmailAccount(id: string): Promise<EmailAccount | null> 
   return all.find((a) => a.id === id) || null;
 }
 
-export async function upsertEmailAccount(acc: EmailAccount): Promise<EmailAccount> {
-  const all = await listEmailAccounts();
-  const idx = all.findIndex((a) => a.email.toLowerCase() === acc.email.toLowerCase());
-  if (idx >= 0) {
-    all[idx] = { ...all[idx], ...acc, id: all[idx].id };
-  } else {
-    all.push(acc);
+/**
+ * Mutex por-key en memoria: serializa el read-modify-write del array de
+ * cuentas para evitar lost-updates cuando el worker de envíos y el sync IMAP
+ * (mutexes independientes) escriben a la vez, o cuando los 5 workers
+ * concurrentes del sync actualizan imap_ok del mismo array.
+ * Como Railway corre un solo proceso Node, un mutex in-process basta.
+ */
+const writeLocks = new Map<string, Promise<unknown>>();
+async function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = writeLocks.get(key) || Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((r) => { release = r; });
+  writeLocks.set(key, prev.then(() => next));
+  try {
+    await prev.catch(() => {});  // espera al anterior (ignora su error)
+    return await fn();
+  } finally {
+    release();
+    // Limpia si nadie más encoló después
+    if (writeLocks.get(key) === next) writeLocks.delete(key);
   }
-  await writeJson(await KEY(),all);
-  return idx >= 0 ? all[idx] : acc;
+}
+
+export async function upsertEmailAccount(acc: EmailAccount): Promise<EmailAccount> {
+  const key = await KEY();
+  return withKeyLock(key, async () => {
+    // Re-lee DENTRO del lock para tener la versión más fresca.
+    const arr = await readJson<EmailAccount[]>(key);
+    const all = Array.isArray(arr) ? arr : [];
+    const idx = all.findIndex((a) => a.email.toLowerCase() === acc.email.toLowerCase());
+    if (idx >= 0) {
+      all[idx] = { ...all[idx], ...acc, id: all[idx].id };
+    } else {
+      all.push(acc);
+    }
+    await writeJson(key, all);
+    return idx >= 0 ? all[idx] : acc;
+  });
 }
 
 export async function deleteEmailAccount(id: string): Promise<boolean> {
-  const all = await listEmailAccounts();
-  const next = all.filter((a) => a.id !== id);
-  if (next.length === all.length) return false;
-  await writeJson(await KEY(),next);
-  return true;
+  const key = await KEY();
+  return withKeyLock(key, async () => {
+    const arr = await readJson<EmailAccount[]>(key);
+    const all = Array.isArray(arr) ? arr : [];
+    const next = all.filter((a) => a.id !== id);
+    if (next.length === all.length) return false;
+    await writeJson(key, next);
+    return true;
+  });
 }
 
 export function newAccountId() {

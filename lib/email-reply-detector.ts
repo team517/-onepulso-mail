@@ -72,7 +72,10 @@ export async function detectRepliesForAccounts(
         // antes de recibir el primer email — lo ignoramos).
         if (lead.last_contacted_at) {
           const sentMs = new Date(lead.last_contacted_at).getTime();
-          if (msgDate <= sentMs) continue; // mensaje anterior al envío, no es reply real
+          // Margen de 60s: el header Date del remitente y nuestro last_contacted_at
+          // pueden diferir por relojes desincronizados. Solo descartamos si el
+          // mensaje es claramente ANTERIOR (>60s antes del envío).
+          if (msgDate < sentMs - 60_000) continue;
         }
         lead.status = "replied";
         lead.last_event = `reply received via ${m.account_email}`;

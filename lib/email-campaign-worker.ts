@@ -85,7 +85,12 @@ const STATE: WorkerState = {
  *  si el anterior se cuelga (p.ej. IMAP de una cuenta sin respuesta). */
 let TICK_IN_FLIGHT = false;
 let TICK_STARTED_AT = 0;
-const TICK_MAX_MS = 4 * 60 * 1000; // 4 min — si excede, asumimos que se colgó
+// 12 min: con timeout de 90s por workspace, un tick normal nunca llega aquí
+// salvo con muchísimos workspaces. El reset por timeout es solo red de
+// seguridad anti-cuelgue-eterno. La protección REAL contra doble envío es el
+// mutex por-cuenta en upsertEmailAccount + next_eligible_at persistido, así
+// que un solapamiento ocasional es benigno (la cuenta no envía 2 veces).
+const TICK_MAX_MS = 12 * 60 * 1000;
 
 function log(entry: Omit<WorkerLogEntry, "at">) {
   const now = Date.now();
@@ -174,10 +179,15 @@ function inSchedule(now: Date, schedule: Campaign["schedule"]): boolean {
     // start_hour incluido, end_hour excluido (igual que Instantly).
     const minutesNow = hour * 60 + minute;
     const minStart = schedule.start_hour * 60;
-    const minEnd = schedule.end_hour * 60;
-    if (minutesNow < minStart) return false;
-    if (minutesNow >= minEnd) return false;
-    return true;
+    // end_hour=0 significa medianoche = fin del día = 1440 min, NO 0.
+    const minEnd = schedule.end_hour === 0 ? 1440 : schedule.end_hour * 60;
+    // Ventana normal (start < end): [start, end)
+    if (minStart < minEnd) {
+      return minutesNow >= minStart && minutesNow < minEnd;
+    }
+    // Ventana que cruza medianoche (start > end, ej. 22:00→06:00):
+    // dentro si ahora >= start O ahora < end.
+    return minutesNow >= minStart || minutesNow < minEnd;
   } catch {
     return false;
   }
@@ -199,22 +209,39 @@ function nextSendTime(lead: Lead, step: Step): Date {
  */
 function getAccountState(account: EmailAccount, tz: string): AccountRuntimeState {
   const today = dayInTz(new Date(), tz);
+  // Estado "de disco" derivado del EmailAccount fresco que nos pasan (viene de
+  // listEmailAccounts al inicio del tick). Es la fuente de verdad.
+  const savedDate = account.sent_today_date || today;
+  const diskSentToday = savedDate === today ? (account.sent_today ?? 0) : 0;
+  const diskNextEligible = account.next_eligible_at || null;
+
   let s = STATE.accounts.get(account.id);
   if (!s) {
-    // Recover de disk
-    const savedDate = account.sent_today_date || today;
     s = {
       last_send_at: account.last_send_at || null,
-      sent_today: savedDate === today ? (account.sent_today ?? 0) : 0,
+      sent_today: diskSentToday,
       today,
-      next_eligible_at: account.next_eligible_at || null,
+      next_eligible_at: diskNextEligible,
     };
     STATE.accounts.set(account.id, s);
+  } else {
+    // RECONCILIA con disco: si una ruta externa (send-now manual, reset-cooldowns,
+    // otro tick) modificó la cuenta, no queremos quedarnos con un valor stale que
+    // permita sobre-envío. Tomamos el MÁS CONSERVADOR.
+    if (s.today === today) {
+      s.sent_today = Math.max(s.sent_today, diskSentToday); // cuenta lo máximo enviado
+    }
+    // next_eligible_at: el más TARDÍO (cooldown más largo gana → más conservador)
+    if (diskNextEligible) {
+      if (!s.next_eligible_at || new Date(diskNextEligible) > new Date(s.next_eligible_at)) {
+        s.next_eligible_at = diskNextEligible;
+      }
+    }
   }
   // Cambio de día → reset sent_today
   if (s.today !== today) {
     s.today = today;
-    s.sent_today = 0;
+    s.sent_today = diskSentToday; // usa el de disco para el nuevo día (0 si savedDate viejo)
   }
   return s;
 }
@@ -407,15 +434,14 @@ async function sendOne(
 }
 
 /** Procesa UNA campaña: hace 0..N envíos según rate-limits.
- *  `recentlySent` es un Set MUTABLE de emails (lowercase) que ya recibieron
- *  un envío en este workspace en las últimas 24h. Se usa para evitar que
- *  el mismo lead reciba 2+ emails si está en varias campañas. El worker
- *  AÑADE a este set cada envío hecho en este tick, así que las siguientes
- *  campañas del mismo tick también respetan el dedupe. */
+ *  `recentlySent` es un Map MUTABLE email→Set(campaign_ids) de los envíos del
+ *  workspace en las últimas 24h. Bloquea SOLO si OTRA campaña ya envió a ese
+ *  email (no el siguiente step de la propia campaña — eso lo controla el delay).
+ *  El worker AÑADE a este map cada envío hecho en este tick. */
 async function processCampaign(
   campaign: Campaign,
   allAccounts: EmailAccount[],
-  recentlySent: Set<string>,
+  recentlySent: Map<string, Set<string>>,
 ) {
   const now = new Date();
   if (!inSchedule(now, campaign.schedule)) {
@@ -462,8 +488,10 @@ async function processCampaign(
     }
     // Dedupe intra-tick: si ya hay otro lead con el mismo email en candidates → skip
     if (seenInTick.has(emailLower)) continue;
-    // Dedupe cross-campaign: si recibió un email en las últimas 24h en este workspace → skip
-    if (recentlySent.has(emailLower)) continue;
+    // Dedupe cross-campaign: bloquea SOLO si OTRA campaña le envió en 24h.
+    // El siguiente step de ESTA campaña NO se bloquea (lo controla nextSendTime).
+    const sentBy = recentlySent.get(emailLower);
+    if (sentBy && Array.from(sentBy).some((cid) => cid !== campaign.id)) continue;
     const stepIdx = lead.current_step;
     if (stepIdx >= campaign.steps.length) continue;
     const step = campaign.steps[stepIdx];
@@ -658,9 +686,14 @@ async function processCampaign(
         campaign.metrics.completed = (campaign.metrics.completed || 0) + 1;
       }
 
-      // Añadir email al set de "ya enviados" → evita que la siguiente campaña
-      // del MISMO tick le envíe otra vez al mismo lead.
-      recentlySent.add(target.lead.email.toLowerCase());
+      // Registrar este envío en el map → la siguiente campaña del MISMO tick
+      // que comparta el lead lo saltará (cross-campaign), pero ESTA campaña
+      // puede seguir avanzando steps.
+      {
+        const em = target.lead.email.toLowerCase();
+        if (!recentlySent.has(em)) recentlySent.set(em, new Set());
+        recentlySent.get(em)!.add(campaign.id);
+      }
 
       // ── Estado de la cuenta — PERSISTIDO en EmailAccount (sobrevive a restart)
       accState.sent_today += 1;
@@ -796,7 +829,10 @@ async function tickWorkspace() {
     // re-enviar al mismo email lo salta. Se va mutando dentro de cada
     // processCampaign tras cada envío exitoso → secuenciales en el tick
     // también respetan el dedupe.
-    const recentlySent = new Set<string>();
+    // email (lowercase) → Set de campaign_ids que le enviaron en las últimas 24h.
+    // El dedupe SOLO bloquea si OTRA campaña ya le envió (no el siguiente step
+    // de la propia campaña — eso lo gobierna nextSendTime/delay).
+    const recentlySent = new Map<string, Set<string>>();
     try {
       const { listSent } = await import("./email-sent-log");
       const allSent = await listSent();
@@ -805,7 +841,10 @@ async function tickWorkspace() {
         if (!s.ok) continue;
         if (s.type !== "campaign") continue;
         if (new Date(s.sent_at).getTime() < cutoff) continue;
-        recentlySent.add((s.to_address || "").toLowerCase());
+        const email = (s.to_address || "").toLowerCase();
+        if (!email) continue;
+        if (!recentlySent.has(email)) recentlySent.set(email, new Set());
+        if (s.campaign_id) recentlySent.get(email)!.add(s.campaign_id);
       }
     } catch {}
 
@@ -887,34 +926,35 @@ async function syncWorkspaceInbox() {
         message: `🔄 Sync IMAP: ${okAccounts}/${inboxResults.length} cuentas revisadas · 0 nuevos · ${elapsed}s${errAccounts > 0 ? ` · ${errAccounts} con error` : ""}`,
       });
     }
-    if (totalNew > 0) {
-      try {
-        const det = await detectRepliesForAccounts(accounts.map((a) => a.id));
-        for (const d of det.detections) {
-          log({
-            level: "info",
-            message: `🟢 Reply detectado de ${d.lead_email} en "${d.campaign_name}"`,
-            campaign_id: d.campaign_id, campaign_name: d.campaign_name,
-            lead_email: d.lead_email, account_email: d.via_account,
-          });
-        }
-      } catch (e: any) {
-        log({ level: "warn", message: `Detección replies falló: ${e.message}` });
+    // Detección de replies + bounces SIEMPRE (no solo si totalNew>0).
+    // Es idempotente y barata (escanea el store local ya descargado). Esto
+    // captura replies que se reclasificaron o que se descargaron en un sync
+    // anterior pero aún no se cruzaron con los leads.
+    try {
+      const det = await detectRepliesForAccounts(accounts.map((a) => a.id));
+      for (const d of det.detections) {
+        log({
+          level: "info",
+          message: `🟢 Reply detectado de ${d.lead_email} en "${d.campaign_name}"`,
+          campaign_id: d.campaign_id, campaign_name: d.campaign_name,
+          lead_email: d.lead_email, account_email: d.via_account,
+        });
       }
-      // Bounces NDR — solo si hay leads activos (evita iterar en vacío)
-      try {
-        const bouncesDetected = await detectBouncesFromInbox(accounts.map((a) => a.id));
-        for (const b of bouncesDetected) {
-          log({
-            level: "warn",
-            message: `📬 Bounce NDR: ${b.lead_email} (${b.reason})`,
-            campaign_id: b.campaign_id, campaign_name: b.campaign_name,
-            lead_email: b.lead_email,
-          });
-        }
-      } catch (e: any) {
-        log({ level: "warn", message: `Detección bounces falló: ${e.message}` });
+    } catch (e: any) {
+      log({ level: "warn", message: `Detección replies falló: ${e.message}` });
+    }
+    try {
+      const bouncesDetected = await detectBouncesFromInbox(accounts.map((a) => a.id));
+      for (const b of bouncesDetected) {
+        log({
+          level: "warn",
+          message: `📬 Bounce NDR: ${b.lead_email} (${b.reason})`,
+          campaign_id: b.campaign_id, campaign_name: b.campaign_name,
+          lead_email: b.lead_email,
+        });
       }
+    } catch (e: any) {
+      log({ level: "warn", message: `Detección bounces falló: ${e.message}` });
     }
   } catch (e: any) {
     log({ level: "warn", message: `Sync IMAP falló: ${e.message}` });
