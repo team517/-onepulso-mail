@@ -369,7 +369,7 @@ function SendAudit({ campaignId }: { campaignId: string }) {
       } catch { if (alive) setLoading(false); }
     }
     load();
-    const h = setInterval(load, 60_000);
+    const h = setInterval(() => { if (typeof document === "undefined" || !document.hidden) load(); }, 60_000);
     return () => { alive = false; clearInterval(h); };
   }, [campaignId]);
 
@@ -554,7 +554,7 @@ function VariantStats({ campaignId }: { campaignId: string }) {
       } catch { if (alive) setLoading(false); }
     }
     load();
-    const h = setInterval(load, 60_000); // refresh cada 60s
+    const h = setInterval(() => { if (typeof document === "undefined" || !document.hidden) load(); }, 60_000); // refresh cada 60s (pausa si pestaña oculta)
     return () => { alive = false; clearInterval(h); };
   }, [campaignId]);
 
@@ -663,7 +663,7 @@ function ActivityLog({ campaignId }: { campaignId: string }) {
   }
   useEffect(() => { load(); }, [campaignId]);
   useEffect(() => {
-    const h = setInterval(load, 30_000); // refresh cada 30s
+    const h = setInterval(() => { if (typeof document === "undefined" || !document.hidden) load(); }, 60_000); // refresh cada 60s (pausa si pestaña oculta; antes 30s)
     return () => clearInterval(h);
   }, [campaignId]);
 
@@ -1233,8 +1233,12 @@ function SequencesTab({ campaign, setCampaign, toast }: { campaign: Campaign; se
       setPreview({ subject: j.subject, body: j.body, lead_email: j.lead?.email });
     }
   }
+  // Debounce el preview: no dispara un fetch en cada tecla del subject/body.
+  // Espera 500ms tras dejar de escribir. Cambiar de step/variante refresca ya.
   useEffect(() => {
-    if (variant) runPreview();
+    if (!variant) return;
+    const h = setTimeout(() => { runPreview(); }, 500);
+    return () => clearTimeout(h);
   }, [activeStepIdx, activeVariantIdx, variant?.subject, variant?.body]);
 
   if (!step || !variant) {
@@ -1897,6 +1901,10 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
   const [sendingNow, setSendingNow] = useState<Set<string>>(new Set());
   // Lead que se está editando (modal)
   const [editingLead, setEditingLead] = useState<{ lead: Lead; missingVars?: string[] } | null>(null);
+  // Paginación cliente: renderiza de 50 en 50 para no congelar el navegador
+  // con cientos de filas. NO afecta a la selección ni a los datos.
+  const [visibleLeadCount, setVisibleLeadCount] = useState(50);
+  useEffect(() => { setVisibleLeadCount(50); }, [debouncedSearch, statusFilter]);
 
   async function sendNow(lead: Lead) {
     const stepNum = lead.current_step + 1;
@@ -2110,7 +2118,7 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
               </tr>
             </thead>
             <tbody>
-              {leads.map((l) => (
+              {leads.slice(0, visibleLeadCount).map((l) => (
                 <tr key={l.id} style={{ borderTop: `1px solid ${LINE}` }}>
                   <td style={{ ...td, padding: "10px 14px" }}>
                     <input type="checkbox"
@@ -2182,6 +2190,17 @@ function LeadsTab({ campaign, setCampaign, toast }: { campaign: Campaign; setCam
               ))}
             </tbody>
           </table>
+          {visibleLeadCount < leads.length && (
+            <div style={{ padding: "12px 16px", borderTop: `1px solid ${LINE}`, background: SURF, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ fontSize: 12.5, color: INK_4, fontFamily: FONT_MONO }}>
+                Mostrando {visibleLeadCount} de {leads.length}
+              </span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setVisibleLeadCount((c) => Math.min(c + 50, leads.length))} style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}>+ Mostrar 50 más</button>
+                <button onClick={() => setVisibleLeadCount(leads.length)} style={{ ...ghostBtn, height: 32, fontSize: 12.5 }}>Ver todos ({leads.length})</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

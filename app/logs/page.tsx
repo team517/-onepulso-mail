@@ -70,7 +70,7 @@ export default function LogsPage() {
   useEffect(() => { load(); }, []);
   useEffect(() => {
     if (paused) return;
-    const h = setInterval(load, 40_000); // refresh cada 40s (antes 10s — demasiado parpadeo)
+    const h = setInterval(() => { if (typeof document === "undefined" || !document.hidden) load(); }, 40_000); // refresh cada 40s (pausa si pestaña oculta)
     return () => clearInterval(h);
   }, [paused]);
 

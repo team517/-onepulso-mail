@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   BG, INK, INK_2, INK_3, INK_4, INK_5, LINE, LINE2, PAPER, SURF, SURF_2,
@@ -101,6 +101,9 @@ export default function BandejasPage() {
   const [showAccountStatus, setShowAccountStatus] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
+  // Ref espejo para descartar respuestas de detalle obsoletas (race al clicar rápido)
+  const selectedMsgIdRef = useRef<string | null>(null);
+  useEffect(() => { selectedMsgIdRef.current = selectedMsgId; }, [selectedMsgId]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detail, setDetail] = useState<{ message: FullMessage; thread: Message[] } | null>(null);
   const [syncSummary, setSyncSummary] = useState<{ new_messages: number; warmup_filtered: number; bounce_filtered: number; ok_accounts: number; total_accounts: number } | null>(null);
@@ -140,8 +143,11 @@ export default function BandejasPage() {
     return () => clearTimeout(t);
   }, [search]);
 
+  const loadSeqRef = useRef(0);
   async function load() {
-    if (!loading) setLoading(false); // sin spinner global en re-cargas
+    // Descartar respuestas obsoletas: cada load incrementa un seq; solo el más
+    // reciente aplica su resultado (evita parpadeo/race entre filtros + auto-sync).
+    const seq = ++loadSeqRef.current;
     try {
       const params = new URLSearchParams();
       if (debouncedSearch) params.set("q", debouncedSearch);
@@ -153,11 +159,12 @@ export default function BandejasPage() {
       params.set("limit", "200");
       const r = await fetch("/api/email-inbox?" + params.toString());
       const j = await r.json();
+      if (seq !== loadSeqRef.current) return; // llegó una carga más nueva → descartar
       setMessages(j.messages || []);
       setTotal(j.total || 0);
       setAccounts(j.accounts || []);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }
   useEffect(() => { load(); }, [debouncedSearch, filter, accountFilter]);
@@ -167,22 +174,29 @@ export default function BandejasPage() {
   // adicional cada 90s para que la latencia entre que llega un email y
   // aparece en la UI sea ~1 min en lugar de 4. Y recargamos la lista
   // local cada 60s para reflejar los mensajes nuevos.
+  const syncInFlight = useRef(false);
   useEffect(() => {
-    // Refresh silencioso de la lista cada 60s
+    // Refresh silencioso de la lista cada 60s — pausado si la pestaña no está visible.
     const refreshHandle = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       if (view === "inbox") load();
       else loadSent();
     }, 60 * 1000);
 
-    // Trigger sync IMAP server cada 90s (más rápido que el worker que es cada 2 min)
+    // Trigger sync IMAP server cada 90s — pausado si pestaña oculta o si ya hay
+    // un sync en curso (evita solapamiento con el sync manual y entre sí).
     const syncHandle = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (syncInFlight.current) return;
+      syncInFlight.current = true;
       fetch("/api/email-inbox/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
         .then((r) => r.json())
         .then(() => {
           if (view === "inbox") load();
           else loadSent();
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => { syncInFlight.current = false; });
     }, 90 * 1000);
 
     return () => {
@@ -219,13 +233,14 @@ export default function BandejasPage() {
     try {
       const r = await fetch(`/api/email-inbox/${m.id}`);
       const j = await r.json();
+      // Si el usuario ya clicó otro mensaje mientras cargaba, descarta este resultado.
+      if (selectedMsgIdRef.current !== m.id) return;
       if (j.message) {
         setDetail(j);
-        // Carga follow-ups de este thread en background
         loadFollowUpsForThread(j.message.thread_id);
       }
     } finally {
-      setDetailLoading(false);
+      if (selectedMsgIdRef.current === m.id) setDetailLoading(false);
     }
     // Marca como leído localmente + persiste
     if (!m.user_read) {
