@@ -99,7 +99,7 @@ export async function sendThreadReply(input: SendThreadInput): Promise<{
     connectionTimeout: 10000, greetingTimeout: 8000, socketTimeout: 15000,
     family: 4, tls: { rejectUnauthorized: false },
     name: "onepulso.online",
-  });
+  } as any);
 
   const fromName = account.display_name
     || [account.first_name, account.last_name].filter(Boolean).join(" ")

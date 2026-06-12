@@ -29,7 +29,7 @@ async function verifySmtp(a: EmailAccount) {
     auth: { user: a.smtp_user, pass: cleanPass(a.smtp_password) },
     connectionTimeout: 10000, greetingTimeout: 8000, socketTimeout: 12000,
     family: 4, tls: { rejectUnauthorized: false }, name: "onepulso.online",
-  });
+  } as any);
   try {
     await t.verify();
     return { ok: true, ms: Date.now() - t0, error: null as string | null };

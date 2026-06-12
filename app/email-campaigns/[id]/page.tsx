@@ -37,6 +37,7 @@ type Campaign = {
   created_at: string; updated_at: string;
   steps: Step[];
   account_ids: string[];
+  account_tags?: string[];
   schedule: Schedule;
   options: Options;
   variables: string[];
@@ -243,11 +244,11 @@ export default function CampaignDetailPage() {
       {/* TAB CONTENT */}
       <section style={{ maxWidth: 1240, margin: "0 auto", padding: "0 28px 80px" }}>
         {tab === "overview" && <OverviewTab campaign={campaign} />}
-        {tab === "sequences" && <SequencesTab campaign={campaign} setCampaign={setCampaign} toast={showToast} />}
-        {tab === "leads" && <LeadsTab campaign={campaign} setCampaign={setCampaign} toast={showToast} />}
+        {tab === "sequences" && <SequencesTab campaign={campaign} setCampaign={setCampaign as any} toast={showToast} />}
+        {tab === "leads" && <LeadsTab campaign={campaign} setCampaign={setCampaign as any} toast={showToast} />}
         {tab === "schedule" && <ScheduleTab campaign={campaign} onChange={async (s) => { await patch({ schedule: s }); showToast("✓ Schedule guardado"); }} />}
         {tab === "options" && <OptionsTab campaign={campaign} onChange={async (o) => { await patch({ options: o }); showToast("✓ Opciones guardadas"); }} />}
-        {tab === "accounts" && <AccountsTab campaign={campaign} setCampaign={setCampaign} toast={showToast} />}
+        {tab === "accounts" && <AccountsTab campaign={campaign} setCampaign={setCampaign as any} toast={showToast} />}
       </section>
 
       {ToastNode}

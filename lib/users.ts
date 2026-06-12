@@ -22,7 +22,7 @@ export type User = {
   last_login_at?: string | null;
 };
 
-export type SafeUser = Omit<User, "password_hash" | "password_salt"> & { has_password: true };
+export type SafeUser = Omit<User, "password_hash" | "password_salt"> & { has_password: boolean };
 
 export function safeUser(u: User): SafeUser {
   const { password_hash, password_salt, ...rest } = u;

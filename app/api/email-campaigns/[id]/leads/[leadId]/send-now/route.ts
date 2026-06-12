@@ -261,7 +261,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       connectionTimeout: 10000, greetingTimeout: 8000, socketTimeout: 15000,
       family: 4, tls: { rejectUnauthorized: false },
       name: "onepulso.online",
-    });
+    } as any);
     const fromName = tryAccount.display_name
       || [tryAccount.first_name, tryAccount.last_name].filter(Boolean).join(" ")
       || tryAccount.email.split("@")[0];

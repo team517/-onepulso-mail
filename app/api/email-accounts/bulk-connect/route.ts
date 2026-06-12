@@ -70,7 +70,7 @@ async function verifySmtp(acc: {
     family: 4,
     tls: { rejectUnauthorized: false },
     name: "onepulso.online",
-  });
+  } as any);
   try {
     await t.verify();
     return { ok: true, ms: Date.now() - t0 };

@@ -99,7 +99,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     family: 4,
     tls: { rejectUnauthorized: false },
     name: "onepulso.online",
-  });
+  } as any);
 
   const fromName = account.display_name
     || [account.first_name, account.last_name].filter(Boolean).join(" ")
