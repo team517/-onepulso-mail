@@ -418,11 +418,14 @@ async function sendOne(
       sentFolder = r.folder;
     } catch {}
 
+    // Dedup + cap de References a las últimas 20 (RFC recomienda no crecer
+    // indefinidamente; algunos servidores rechazan headers enormes).
+    const newRefs = Array.from(new Set(referencesArr.concat([info.messageId || newMessageId]))).slice(-20);
     return {
       ok: true,
       message_id: info.messageId || newMessageId,
       thread_subject: isFirstStep ? subjectRaw : (lead.thread_subject || subjectRaw),
-      references: referencesArr.concat([info.messageId || newMessageId]),
+      references: newRefs,
       appended,
       sent_folder: sentFolder,
     };

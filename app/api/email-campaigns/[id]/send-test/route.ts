@@ -87,6 +87,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const subject = renderTemplate(variant.subject || "(sin asunto)", variables, { seed });
   const html    = renderTemplate(variant.body || "(sin contenido)", variables, { seed });
 
+  // Valida que el cuerpo no quede vacío tras render (variables sin valor)
+  const bodyTextCheck = html.replace(/<[^>]+>/g, "").replace(/&[a-z]+;/gi, "").trim();
+  if (!bodyTextCheck) {
+    return NextResponse.json({
+      error: "El cuerpo de la variante queda vacío tras renderizar (variables sin valor). Rellena el body o las variables del lead.",
+    }, { status: 400 });
+  }
+
   // SMTP transporter usando las credenciales de la cuenta
   const t = nodemailer.createTransport({
     host: account.smtp_host,

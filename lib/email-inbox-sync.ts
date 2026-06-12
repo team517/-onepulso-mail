@@ -121,14 +121,33 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
         return { ...result, ms: Date.now() - t0 };
       }
 
-      // Trae hasta los últimos 200 mensajes (cobertura amplia, dedupe por UID)
       const existing = await listMessagesForAccount(account.id);
       const existingUids = new Set(existing.map((m) => m.uid));
-      const start = Math.max(1, total - 199);
-      const range = `${start}:*`;
+
+      // FETCH INCREMENTAL POR UID (no por número de secuencia):
+      // - Si ya hemos sincronizado antes, traemos TODO lo nuevo por UID
+      //   (`${lastUid+1}:*` con uid:true) — sin límite de ventana, nunca se
+      //   pierde un reply por avalancha de mensajes.
+      // - Primera vez: traemos los últimos 200 por secuencia (bootstrap).
+      const prevMeta = await getMeta(account.id);
+      const lastUid = (prevMeta && typeof prevMeta.last_uid === "number" && prevMeta.last_uid > 0)
+        ? prevMeta.last_uid
+        : null;
+
+      let fetchRange: string;
+      let useUid: boolean;
+      if (lastUid) {
+        fetchRange = `${lastUid + 1}:*`;   // todo con UID mayor al último visto
+        useUid = true;
+      } else {
+        fetchRange = `${Math.max(1, total - 199)}:*`; // bootstrap por secuencia
+        useUid = false;
+      }
 
       const fresh: InboxMessage[] = [];
-      for await (const msg of client.fetch(range, { envelope: true, source: true, uid: true, flags: true })) {
+      let maxUidSeen = lastUid || 0;
+      for await (const msg of client.fetch(fetchRange, { envelope: true, source: true, uid: true, flags: true }, { uid: useUid })) {
+        if (msg.uid > maxUidSeen) maxUidSeen = msg.uid;
         if (existingUids.has(msg.uid)) continue;
         if (!msg.source) continue;
         try {
@@ -203,15 +222,25 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
       result.new_count = fresh.length;
 
       // Reclasifica is_warmup/is_bounce de los mensajes EXISTENTES con la heurística
-      // actual. Si el mensaje viene de un LEAD del workspace → bypass de filtros
-      // (es una respuesta legítima, debe aparecer siempre).
+      // actual. Si el mensaje viene de un LEAD → bypass de filtros (visible).
+      // REGLA CLAVE: solo permitimos desclasificar de oculto→VISIBLE. NUNCA
+      // re-ocultamos un mensaje que ya estaba visible (evita que, si un lead
+      // se borra del workspace, su respuesta rescatada vuelva a ocultarse).
       const reclassified = existing.map((m) => {
         const isFromLead = leadEmails.has((m.from_address || "").toLowerCase());
-        const wm = isFromLead ? false : isWarmupMessage({
+        const wasVisible = !m.is_warmup && !m.is_bounce;
+        if (isFromLead || wasVisible) {
+          // De lead o ya visible → garantizamos visible (nunca re-ocultar)
+          if (m.is_warmup || m.is_bounce) return { ...m, is_warmup: false, is_bounce: false };
+          return m;
+        }
+        // Estaba oculto y NO es de lead → recomputa por si la heurística cambió
+        // (puede pasar de oculto a visible si ahora ya no matchea).
+        const wm = isWarmupMessage({
           subject: m.subject, text: m.text, html: m.html,
           from: m.from_address, fromName: m.from_name,
         });
-        const bn = isFromLead ? false : isBounceOrFailure({
+        const bn = isBounceOrFailure({
           from: m.from_address, fromAddress: m.from_address,
           fromName: m.from_name, subject: m.subject, text: m.text,
         });
@@ -331,7 +360,9 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
         account_id: account.id,
         last_sync: new Date().toISOString(),
         last_error: null,
-        last_uid: total,
+        // Guardamos el UID REAL máximo visto (no el message count) para el
+        // fetch incremental del próximo sync.
+        last_uid: maxUidSeen > 0 ? maxUidSeen : (lastUid || null),
         total_messages: deduped.length,
       });
       result.ok = true;

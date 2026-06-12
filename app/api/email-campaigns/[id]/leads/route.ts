@@ -114,7 +114,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       variables: Object.fromEntries(
         Object.entries(l).filter(([k]) => k !== "email").map(([k, v]) => [headerToKey(k), String(v ?? "")])
       ),
-    })).filter((r: any) => r.email);
+    })).filter((r: any) => r.email && r.email.includes("@")); // valida formato mínimo
     detectedVars = Array.from(new Set(rows.flatMap((r) => Object.keys(r.variables))));
   } else {
     return NextResponse.json({ error: "Manda { csv } o { leads: [] }" }, { status: 400 });

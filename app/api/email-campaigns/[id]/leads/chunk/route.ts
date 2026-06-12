@@ -15,10 +15,45 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { addLeadsBulk, getCampaign, listCampaigns, listLeads } from "@/lib/email-campaigns";
-import { listBlocklist, isBlocked } from "@/lib/email-blocklist";
+import { listBlocklist, isBlocked, type BlockEntry } from "@/lib/email-blocklist";
+import { getWorkspaceId } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+/**
+ * Cache del set de exclusión (emails de otras campañas + blocklist) por
+ * (workspace + campaña destino). TTL 30s → cubre toda una importación de
+ * 6000 leads (60 chunks) calculando el set UNA vez, no por chunk.
+ * Antes: cada chunk recargaba TODOS los leads de TODAS las campañas → O(N²).
+ */
+type DedupeCache = { at: number; otherEmails: Set<string>; blocklist: BlockEntry[] };
+const dedupeCache = new Map<string, DedupeCache>();
+const DEDUPE_TTL_MS = 30_000;
+
+async function getDedupeSets(workspaceId: string, campaignId: string, skipBlocklist: boolean, skipOther: boolean): Promise<DedupeCache> {
+  const cacheKey = `${workspaceId}::${campaignId}`;
+  const cached = dedupeCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < DEDUPE_TTL_MS) return cached;
+
+  const blocklist = skipBlocklist ? await listBlocklist() : [];
+  const otherEmails = new Set<string>();
+  if (skipOther) {
+    const all = await listCampaigns();
+    for (const other of all) {
+      if (other.id === campaignId) continue;
+      const ls = await listLeads(other.id);
+      for (const l of ls) otherEmails.add(l.email.toLowerCase());
+    }
+  }
+  const entry = { at: Date.now(), otherEmails, blocklist };
+  dedupeCache.set(cacheKey, entry);
+  if (dedupeCache.size > 50) {
+    const cutoff = Date.now() - DEDUPE_TTL_MS;
+    for (const [k, v] of dedupeCache) if (v.at < cutoff) dedupeCache.delete(k);
+  }
+  return entry;
+}
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -37,17 +72,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const skipBlocklist = body.skip_blocklist !== false;        // default true
   const skipOtherCampaigns = body.skip_other_campaigns !== false; // default true
 
-  // Conjuntos de exclusión
-  const blocklist = skipBlocklist ? await listBlocklist() : [];
-  const otherEmails = new Set<string>();
-  if (skipOtherCampaigns) {
-    const all = await listCampaigns();
-    for (const other of all) {
-      if (other.id === id) continue;
-      const ls = await listLeads(other.id);
-      for (const l of ls) otherEmails.add(l.email.toLowerCase());
-    }
-  }
+  // Conjuntos de exclusión (cacheados por importación, no recalculados por chunk)
+  const ws = await getWorkspaceId();
+  const { otherEmails, blocklist } = await getDedupeSets(ws, id, skipBlocklist, skipOtherCampaigns);
 
   let skippedBlocklist = 0;
   let skippedOther = 0;
