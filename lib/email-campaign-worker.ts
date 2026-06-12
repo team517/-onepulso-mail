@@ -357,6 +357,7 @@ async function sendOne(
     const info = await t.sendMail({
       from: `"${fromName}" <${account.email}>`,
       to: lead.email,
+      replyTo: account.email,          // las respuestas vuelven a la misma cuenta (deliverability)
       subject: subjectOut,
       text: textBody,
       html: htmlOut,
