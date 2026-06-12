@@ -353,17 +353,40 @@ export async function syncInboxForAccount(account: EmailAccount): Promise<{
   return result;
 }
 
-/** Sync de todas las cuentas conectadas (concurrencia limitada). */
-export async function syncAllInboxes(accounts: EmailAccount[], concurrency = 3) {
-  const filtered = accounts.filter((a) => a.imap_ok);
+/** Sync de todas las cuentas conectadas (concurrencia limitada).
+ *
+ *  IMPORTANTE: ya NO filtramos por imap_ok. Cualquier cuenta que tenga
+ *  host + user + password de IMAP se intenta sincronizar. Si el sync
+ *  funciona, marcamos imap_ok=true automáticamente (auto-recovery). Si
+ *  falla, marcamos imap_ok=false con el error. Así ninguna cuenta
+ *  conectada se queda sin sincronizar en silencio. */
+export async function syncAllInboxes(accounts: EmailAccount[], concurrency = 5) {
+  // Solo necesita credenciales IMAP mínimas — NO el flag imap_ok.
+  const syncable = accounts.filter(
+    (a) => a.imap_host && (a.imap_user || a.email) && a.imap_password,
+  );
   const results: Awaited<ReturnType<typeof syncInboxForAccount>>[] = [];
   let i = 0;
   async function worker() {
-    while (i < filtered.length) {
+    while (i < syncable.length) {
       const idx = i++;
-      results[idx] = await syncInboxForAccount(filtered[idx]);
+      const acc = syncable[idx];
+      const r = await syncInboxForAccount(acc);
+      results[idx] = r;
+      // Auto-recovery del flag imap_ok según el resultado del sync real.
+      try {
+        const { getEmailAccount, upsertEmailAccount } = await import("./email-accounts");
+        const fresh = await getEmailAccount(acc.id);
+        if (fresh) {
+          if (r.ok && !fresh.imap_ok) {
+            await upsertEmailAccount({ ...fresh, imap_ok: true, last_imap_error: null });
+          } else if (!r.ok && fresh.imap_ok && r.error) {
+            await upsertEmailAccount({ ...fresh, imap_ok: false, last_imap_error: r.error });
+          }
+        }
+      } catch {}
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, filtered.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, syncable.length) }, worker));
   return results;
 }

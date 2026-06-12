@@ -1102,8 +1102,8 @@ export function startWorker(intervalSeconds = 30) {
   tickWorker().catch(() => {});
   intervalHandle = setInterval(() => { tickWorker().catch(() => {}); }, intervalSeconds * 1000);
   // Sync IMAP (lento, separado del tick principal)
-  setTimeout(() => { tickInboxSync().catch(() => {}); }, 10_000); // primer sync a los 10s
-  syncIntervalHandle = setInterval(() => { tickInboxSync().catch(() => {}); }, 120_000); // cada 2 min
+  setTimeout(() => { tickInboxSync().catch(() => {}); }, 8_000); // primer sync a los 8s
+  syncIntervalHandle = setInterval(() => { tickInboxSync().catch(() => {}); }, 60_000); // cada 1 min
 }
 
 export function stopWorker() {

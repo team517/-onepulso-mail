@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     const r = await syncInboxForAccount(acc);
     return NextResponse.json({ ok: true, results: [r] });
   }
-  const results = await syncAllInboxes(accounts, 3);
+  const results = await syncAllInboxes(accounts, 5);
   return NextResponse.json({
     ok: true,
     summary: {

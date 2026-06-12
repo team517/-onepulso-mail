@@ -63,9 +63,17 @@ export async function listMessagesForAccount(accountId: string): Promise<InboxMe
 }
 
 export async function writeMessagesForAccount(accountId: string, msgs: InboxMessage[]) {
-  // Mantener máximo 500 por cuenta (los más recientes)
+  // Política de retención: NUNCA expulsar mensajes legítimos (no-warmup) por
+  // culpa de una avalancha de warmup. Guardamos:
+  //   - TODOS los mensajes legítimos (hasta 800, los más recientes)
+  //   - + warmup/bounce recientes hasta completar 1500 en total
+  // Antes: 500 a secas → un día de warmup podía borrar una respuesta real.
   const sorted = msgs.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  await writeJson(await MSG_KEY(accountId), sorted.slice(0, 500));
+  const legit = sorted.filter((m) => !m.is_warmup).slice(0, 800);
+  const legitIds = new Set(legit.map((m) => m.id));
+  const rest = sorted.filter((m) => !legitIds.has(m.id)).slice(0, 1500 - legit.length);
+  const out = [...legit, ...rest].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  await writeJson(await MSG_KEY(accountId), out);
 }
 
 export async function getMeta(accountId: string): Promise<InboxMeta> {
