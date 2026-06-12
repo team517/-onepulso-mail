@@ -316,24 +316,27 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       const ms = Date.now() - t0;
       const nowIso = new Date().toISOString();
 
-      // Actualizar lead
-      const leadIdx = leads.findIndex((l) => l.id === leadId);
+      // Actualizar lead — RE-LEE leads frescos justo antes de escribir para
+      // no pisar cambios que el worker hizo a OTROS leads mientras enviábamos.
+      const freshLeads = await listLeads(id);
+      const leadIdx = freshLeads.findIndex((l) => l.id === leadId);
       if (leadIdx >= 0) {
         const isFinalStep = stepIdx + 1 >= campaign.steps.length;
-        leads[leadIdx] = {
-          ...lead,
+        const cur = freshLeads[leadIdx];
+        freshLeads[leadIdx] = {
+          ...cur,
           status: isFinalStep ? "completed" : "active",
           current_step: stepIdx + 1,
           last_contacted_at: nowIso,
-          first_contacted_at: lead.first_contacted_at || (isFirstStep ? nowIso : null),
+          first_contacted_at: cur.first_contacted_at || (isFirstStep ? nowIso : null),
           last_event: `manual send step ${stepIdx + 1} variant ${variant.label}`,
-          sticky_account_id: lead.sticky_account_id || tryAccount.id,
+          sticky_account_id: cur.sticky_account_id || tryAccount.id,
           finished_reason: isFinalStep ? "completed_sequence" : null,
-          thread_subject: lead.thread_subject || subjectRaw,
+          thread_subject: cur.thread_subject || subjectRaw,
           last_message_id: info.messageId || newMessageId,
-          thread_references: [...(lead.thread_references || []), info.messageId || newMessageId],
+          thread_references: [...(cur.thread_references || []), info.messageId || newMessageId],
         };
-        await writeLeads(id, leads);
+        await writeLeads(id, freshLeads);
       }
 
       // Actualizar cuenta (sent_today + gap normal para próximos envíos)

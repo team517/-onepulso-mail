@@ -702,7 +702,10 @@ async function processCampaign(
       accState.sent_today += 1;
       accState.last_send_at = nowIso;
       const gapMinutes = minGap + Math.random() * randomGap;
-      accState.next_eligible_at = new Date(now.getTime() + gapMinutes * 60_000).toISOString();
+      // Gap desde AHORA (momento real del envío), no desde el inicio del tick.
+      // Si un tick procesa varios envíos secuenciales, cada uno parte de su
+      // propio instante → el gap real entre envíos es exacto.
+      accState.next_eligible_at = new Date(Date.now() + gapMinutes * 60_000).toISOString();
 
       // Espejo a disk
       const fresh = await getEmailAccount(account.id);
@@ -763,8 +766,8 @@ async function processCampaign(
         lead_id: target.lead.id, lead_email: target.lead.email,
         account_id: account.id, account_email: account.email,
       });
-      // Gap más corto tras fallo para no martillar
-      accState.next_eligible_at = new Date(now.getTime() + 2 * 60_000).toISOString();
+      // Gap más corto tras fallo para no martillar (desde el instante real)
+      accState.next_eligible_at = new Date(Date.now() + 2 * 60_000).toISOString();
       const fresh = await getEmailAccount(account.id);
       if (fresh) {
         await upsertEmailAccount({ ...fresh, next_eligible_at: accState.next_eligible_at });

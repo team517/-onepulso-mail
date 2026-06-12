@@ -104,8 +104,9 @@ async function hasMxRecord(domain: string): Promise<boolean | null> {
     mxCache.set(domain, { hasMx, checkedAt: Date.now() });
     return hasMx;
   } catch (e: any) {
-    if (e.code === "ENOTFOUND" || e.code === "ENODATA") {
-      // Domain doesn't have MX — pero comprueba A record por si acaso (RFC 5321)
+    // ENODATA = el dominio EXISTE pero no tiene registros MX → fallback a A
+    // record (RFC 5321: un A record implica que el host puede recibir mail).
+    if (e.code === "ENODATA") {
       try {
         await dns.resolve4(domain);
         mxCache.set(domain, { hasMx: true, checkedAt: Date.now() });
@@ -114,6 +115,12 @@ async function hasMxRecord(domain: string): Promise<boolean | null> {
         mxCache.set(domain, { hasMx: false, checkedAt: Date.now() });
         return false;
       }
+    }
+    // ENOTFOUND = el dominio NO EXISTE (NXDOMAIN) → invalid directo, sin
+    // fallback. Antes hacía A-lookup que también falla pero el flujo era confuso.
+    if (e.code === "ENOTFOUND") {
+      mxCache.set(domain, { hasMx: false, checkedAt: Date.now() });
+      return false;
     }
     // Timeout u otro fallo temporal → null (unknown)
     return null;

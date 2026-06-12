@@ -46,6 +46,18 @@ export async function listUsers(): Promise<User[]> {
   return Array.isArray(arr) ? arr : [];
 }
 
+/** Mutex in-process para serializar el read-modify-write del blob de users
+ *  y evitar lost-updates en signups/cambios concurrentes. */
+let usersLock: Promise<unknown> = Promise.resolve();
+async function withUsersLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = usersLock;
+  let release!: () => void;
+  const next = new Promise<void>((r) => { release = r; });
+  usersLock = prev.then(() => next);
+  try { await prev.catch(() => {}); return await fn(); }
+  finally { release(); }
+}
+
 export async function getUserByEmail(email: string): Promise<User | null> {
   const all = await listUsers();
   const e = email.toLowerCase().trim();
@@ -61,51 +73,59 @@ export async function createUser(data: { email: string; password: string; name?:
   const email = data.email.toLowerCase().trim();
   if (!email || !email.includes("@")) return { error: "Email inválido" };
   if (!data.password || data.password.length < 6) return { error: "Contraseña mínimo 6 caracteres" };
-  const all = await listUsers();
-  if (all.find((u) => u.email.toLowerCase() === email)) {
-    return { error: "Ya existe un usuario con ese email" };
-  }
-  const { hash, salt } = hashPassword(data.password);
-  const u: User = {
-    id: crypto.randomUUID(),
-    email,
-    name: data.name?.trim() || undefined,
-    role: data.role || "user",
-    password_hash: hash,
-    password_salt: salt,
-    created_at: new Date().toISOString(),
-    last_login_at: null,
-  };
-  all.unshift(u);
-  await writeJson(KEY, all);
-  return { user: u };
+  return withUsersLock(async () => {
+    const all = await listUsers();
+    if (all.find((u) => u.email.toLowerCase() === email)) {
+      return { error: "Ya existe un usuario con ese email" };
+    }
+    const { hash, salt } = hashPassword(data.password);
+    const u: User = {
+      id: crypto.randomUUID(),
+      email,
+      name: data.name?.trim() || undefined,
+      role: data.role || "user",
+      password_hash: hash,
+      password_salt: salt,
+      created_at: new Date().toISOString(),
+      last_login_at: null,
+    };
+    all.unshift(u);
+    await writeJson(KEY, all);
+    return { user: u };
+  });
 }
 
 export async function updateUser(id: string, patch: Partial<Pick<User, "name" | "role" | "last_login_at">>): Promise<User | null> {
-  const all = await listUsers();
-  const idx = all.findIndex((u) => u.id === id);
-  if (idx < 0) return null;
-  all[idx] = { ...all[idx], ...patch, id: all[idx].id };
-  await writeJson(KEY, all);
-  return all[idx];
+  return withUsersLock(async () => {
+    const all = await listUsers();
+    const idx = all.findIndex((u) => u.id === id);
+    if (idx < 0) return null;
+    all[idx] = { ...all[idx], ...patch, id: all[idx].id };
+    await writeJson(KEY, all);
+    return all[idx];
+  });
 }
 
 export async function changePassword(id: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
   if (!newPassword || newPassword.length < 6) return { ok: false, error: "Contraseña mínimo 6 caracteres" };
-  const all = await listUsers();
-  const idx = all.findIndex((u) => u.id === id);
-  if (idx < 0) return { ok: false, error: "Usuario no encontrado" };
-  const { hash, salt } = hashPassword(newPassword);
-  all[idx].password_hash = hash;
-  all[idx].password_salt = salt;
-  await writeJson(KEY, all);
-  return { ok: true };
+  return withUsersLock(async () => {
+    const all = await listUsers();
+    const idx = all.findIndex((u) => u.id === id);
+    if (idx < 0) return { ok: false, error: "Usuario no encontrado" };
+    const { hash, salt } = hashPassword(newPassword);
+    all[idx].password_hash = hash;
+    all[idx].password_salt = salt;
+    await writeJson(KEY, all);
+    return { ok: true };
+  });
 }
 
 export async function deleteUser(id: string): Promise<boolean> {
-  const all = await listUsers();
-  const next = all.filter((u) => u.id !== id);
-  if (next.length === all.length) return false;
-  await writeJson(KEY, next);
-  return true;
+  return withUsersLock(async () => {
+    const all = await listUsers();
+    const next = all.filter((u) => u.id !== id);
+    if (next.length === all.length) return false;
+    await writeJson(KEY, next);
+    return true;
+  });
 }
